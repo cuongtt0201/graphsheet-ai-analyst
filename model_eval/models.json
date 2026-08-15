@@ -1,0 +1,27 @@
+[
+  {
+    "provider": "gemini",
+    "model": "gemini-2.5-flash",
+    "priority": 0
+  },
+  {
+    "provider": "gemini",
+    "model": "gemini-flash-lite-latest",
+    "priority": 1
+  },
+  {
+    "provider": "gemini",
+    "model": "gemini-3.1-flash-lite",
+    "priority": 2
+  },
+  {
+    "provider": "gemini",
+    "model": "gemini-3.1-flash-lite-preview",
+    "priority": 3
+  },
+  {
+    "provider": "gemini",
+    "model": "gemini-2.5-flash-lite",
+    "priority": 4
+  }
+]

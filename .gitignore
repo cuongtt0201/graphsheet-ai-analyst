@@ -1,0 +1,42 @@
+# Environment & Secrets
+.env
+*.local
+client_secret*.json
+credentials.json
+
+# Python & Caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Node / React
+node_modules/
+dist/
+.vite/
+
+# Database & Storage runtime files
+neo4j_data/
+*.energy.db
+*.db
+storage/
+*.xlsx
+*.csv
+
+# Logs & Temporary files
+*.log
+repomix-*
+.backup/
+.ua/tmp/
+.ua/intermediate/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

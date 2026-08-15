@@ -1,0 +1,7 @@
+# Image for the code-execution sandbox (sibling containers spawned by
+# app/agent/sandbox.py). Build once:
+#   docker build -f Dockerfile.sandbox -t ai-dashboard-sandbox .
+# Override the tag via SANDBOX_IMAGE if you use a different name.
+FROM python:3.11-slim
+
+RUN pip install --no-cache-dir pandas>=2.2.0 numpy pyarrow>=15.0.0

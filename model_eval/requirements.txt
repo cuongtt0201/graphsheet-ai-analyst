@@ -1,0 +1,4 @@
+google-genai>=0.3.0
+openai>=1.40.0
+jsonschema>=4.22.0
+python-dotenv>=1.0.1

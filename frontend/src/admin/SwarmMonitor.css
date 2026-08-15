@@ -1,0 +1,152 @@
+.swarm-admin {
+  background: #0f172a;
+  color: #e2e8f0;
+  height: 100vh;
+  padding: 2rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  box-sizing: border-box;
+}
+
+.swarm-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #334155;
+  padding-bottom: 1rem;
+}
+
+.swarm-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: #38bdf8;
+  letter-spacing: 2px;
+}
+
+.status-badge {
+  padding: 0.5rem 1rem;
+  border-radius: 99px;
+  font-weight: bold;
+  font-size: 0.875rem;
+}
+
+.status-badge.live {
+  background: rgba(34, 197, 94, 0.2);
+  color: #4ade80;
+  border: 1px solid #22c55e;
+}
+
+.status-badge.offline {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border: 1px solid #ef4444;
+}
+
+.agent-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.5rem;
+}
+
+.agent-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 1.5rem;
+  transition: all 0.3s ease;
+}
+
+.agent-card.active {
+  border-color: #38bdf8;
+  box-shadow: 0 0 15px rgba(56, 189, 248, 0.2);
+}
+
+.agent-card h3 {
+  margin: 0 0 1rem 0;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pulse {
+  width: 10px;
+  height: 10px;
+  background-color: #38bdf8;
+  border-radius: 50%;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.7); }
+  70% { box-shadow: 0 0 0 10px rgba(56, 189, 248, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }
+}
+
+.agent-last-thought {
+  font-size: 0.875rem;
+  color: #cbd5e1;
+  min-height: 40px;
+}
+
+.log-container {
+  flex: 1;
+  background: #000;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-header {
+  background: #1e293b;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  font-weight: bold;
+  color: #94a3b8;
+  border-bottom: 1px solid #334155;
+}
+
+.log-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.log-entry {
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.log-time {
+  color: #64748b;
+  margin-right: 0.75rem;
+}
+
+.log-agent {
+  color: #a78bfa;
+  font-weight: bold;
+  margin-right: 0.75rem;
+}
+
+.log-msg {
+  color: #e2e8f0;
+}
+
+.log-entry.type-error .log-msg { color: #f87171; }
+.log-entry.type-api_call .log-msg { color: #34d399; }
+.log-entry.type-thought .log-msg { color: #93c5fd; }
+
+.log-meta {
+  margin: 0.25rem 0 0 2rem;
+  padding: 0.5rem;
+  background: rgba(255, 255, 255, 0.05);
+  border-left: 2px solid #475569;
+  font-size: 0.75rem;
+  color: #94a3b8;
+  white-space: pre-wrap;
+}

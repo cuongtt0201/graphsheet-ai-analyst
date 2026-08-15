@@ -1,0 +1,67 @@
+services:
+  # ============================================================
+  # 🕸️ Neo4j Knowledge Graph Memory (Neo4j 5 Community)
+  # ============================================================
+  neo4j:
+    image: neo4j:5-community
+    container_name: graphsheet_neo4j
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/graphsheet_secure_pass_2026}
+      NEO4J_server_http_enabled: "false" # Keep Bolt protocol on 7687 only
+    ports:
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"${NEO4J_PASSWORD:-graphsheet_secure_pass_2026}\" 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # ============================================================
+  # ⚡ FastAPI Core Backend & Dual-Tier Sandbox Engine
+  # ============================================================
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: graphsheet_backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - ENERGY_DB_PATH=/srv/backend/app/storage/.energy.db
+      - NEO4J_URI=bolt://neo4j:7687
+    depends_on:
+      neo4j:
+        condition: service_healthy
+        required: false
+    volumes:
+      - ./model_eval/models.json:/srv/model_eval/models.json:ro
+      - ./backend/app/storage:/srv/backend/app/storage
+      - ./backend/app/skills:/srv/backend/app/skills
+      # Mount Docker socket so backend can spawn isolated sibling sandbox containers
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  # ============================================================
+  # 💻 Interactive React UI + Univer Spreadsheet Canvas
+  # ============================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    container_name: graphsheet_frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  neo4j_data:

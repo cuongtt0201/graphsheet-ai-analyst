@@ -1,0 +1,31 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@kanaries/graphic-walker": "^0.5.2",
+    "@univerjs/preset-sheets-core": "^0.25.1",
+    "@univerjs/presets": "^0.25.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "vega": "^6.2.0",
+    "vega-embed": "^7.1.0",
+    "vega-lite": "^6.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "oxlint": "^1.71.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.1.1"
+  }
+}
