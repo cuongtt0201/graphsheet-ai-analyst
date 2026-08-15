@@ -1,42 +1,30 @@
-# Environment & Secrets
-.env
-*.local
-client_secret*.json
-credentials.json
-
-# Python & Caches
+# Dependencies
+node_modules/
+frontend/node_modules/
+frontend/dist/
 __pycache__/
 *.py[cod]
 *$py.class
-*.egg-info/
 .pytest_cache/
-.coverage
-htmlcov/
-dist/
-build/
 
-# Node / React
-node_modules/
-dist/
-.vite/
+# Environment variables & secrets
+.env
+*.env
+backend/.env
+model_eval/.env
+client_secret_*.json
 
-# Database & Storage runtime files
-neo4j_data/
-*.energy.db
-*.db
-storage/
-*.xlsx
-*.csv
-
-# Logs & Temporary files
+# Storage, logs & databases
+backend/app/storage/
+backend/server.log
+backend/.energy.db
 *.log
-repomix-*
-.backup/
-.ua/tmp/
-.ua/intermediate/
+*.sqlite3
 
-# IDE & OS
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
+# Large local knowledge graph, backups & repomix dumps
+.backup/
+.claude/
+.ua/
+scratch/
+repomix-output.xml
+repomix-clean.md
