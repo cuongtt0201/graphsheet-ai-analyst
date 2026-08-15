@@ -1,13 +1,15 @@
 <p align="center">
   <h1 align="center">📊 GraphSheet AI Analyst</h1>
   <p align="center">
-    <strong>Open-Source, Enterprise-Grade Multi-Agent Data Analyst & Sandboxed Code Execution Platform</strong>
+    <strong>Open-Source, Enterprise-Grade Multi-Agent Swarm & Sandboxed Data Analytics Platform</strong>
   </p>
   <p align="center">
-    <em>Turn natural language queries into verified Python analytics, interactive spreadsheets, and production charts — with zero hallucinations and ironclad security.</em>
+    <em>Turn natural language queries into verified Python analytics, interactive spreadsheets, and production charts with an autonomous, self-learning Multi-Agent Swarm.</em>
   </p>
   <p align="center">
     <a href="https://github.com/cuongtt0201/graphsheet-ai-analyst"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
+    <a href="https://github.com/cuongtt0201/graphsheet-ai-analyst"><img src="https://img.shields.io/badge/Architecture-Multi--Agent%20Swarm-purple.svg" alt="Multi-Agent Swarm"></a>
+    <a href="https://github.com/cuongtt0201/graphsheet-ai-analyst"><img src="https://img.shields.io/badge/Memory-Neo4j%20Graph%20%2B%20Skills-FF6B6B.svg" alt="Neo4j Memory"></a>
     <a href="https://github.com/cuongtt0201/graphsheet-ai-analyst"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?logo=python&logoColor=white" alt="Python Version"></a>
     <a href="https://github.com/cuongtt0201/graphsheet-ai-analyst"><img src="https://img.shields.io/badge/FastAPI-0.100%2B-009688.svg?logo=fastapi&logoColor=white" alt="FastAPI"></a>
     <a href="https://github.com/cuongtt0201/graphsheet-ai-analyst"><img src="https://img.shields.io/badge/React-19-61DAFB.svg?logo=react&logoColor=black" alt="React 19"></a>
@@ -20,9 +22,61 @@
 
 ## 🌟 What is GraphSheet AI?
 
-**GraphSheet AI Analyst** is a self-hosted, full-stack AI analytics engine engineered for teams that require **absolute data safety, multi-model cost resilience, and verified numeric accuracy**.
+**GraphSheet AI Analyst** is a self-hosted, full-stack **Multi-Agent Swarm** engineered for enterprise teams requiring **absolute data security, continuous self-learning, multi-model cost resilience, and verified numeric accuracy**.
 
-Unlike ordinary AI chatbot wrappers that simply stream text, GraphSheet AI acts as an **autonomous data engineer**: it ingests raw spreadsheets, writes and inspects Python analysis code, runs it inside a secure isolated sandbox, verifies the calculations with deterministic check gates, and renders interactive spreadsheets and visualization dashboards in real-time.
+Unlike simple single-prompt chatbot wrappers, GraphSheet AI coordinates a **specialized swarm of autonomous agents**: they collaborate via a shared latent memory hub, write and inspect Python analysis code, execute safely inside dual-tier container sandboxes, self-correct errors, verify calculations via deterministic gates, and synthesize interactive spreadsheets and visualization dashboards in real-time.
+
+---
+
+## 🐝 Multi-Agent Swarm Intelligence & Collaborative Memory
+
+GraphSheet AI orchestrates a swarm of specialized sub-agents that communicate telepathically through a unified **Swarm Context Hub**:
+
+```mermaid
+flowchart TD
+    User([👤 User Request / File Upload]) --> Router[🔀 Router & FinOps Energy Ledger]
+    
+    subgraph SwarmHub["🧠 Latent Swarm Memory Space & Telepathy"]
+        Broadcast[🚨 Ephemeral Broadcasts - Inter-agent Warnings]
+        SkillsMem[⚡ Muscle Memory - Learned Python Skills]
+        GraphMem[(🕸️ Neo4j Knowledge Graph - User Habits & Preferences)]
+    end
+
+    subgraph AgentSwarm["🐝 The Autonomous Agent Swarm"]
+        DataAgent["🧹 DataAgent<br/><i>Auto Joins, Profiling & Mojibake Cleansing</i>"]
+        CodeAgent["💻 CodeInterpreter Agent<br/><i>Pandas/Matplotlib Synthesis & Execution</i>"]
+        DashboardAgent["📊 DashboardAgent<br/><i>Deterministic KPI Layouts & Self-Fixer</i>"]
+        Investigator["🔍 InvestigatorAgent<br/><i>Bounded Root-Cause Analysis Loop</i>"]
+        GoalExplorer["🎯 GoalExplorerAgent<br/><i>Hypothesis Generation & Plan Decomposition</i>"]
+        InsightAgent["💡 InsightAgent<br/><i>Narrative Synthesis & Grounding Verification</i>"]
+    end
+
+    subgraph ExecutionSecurity["🛡️ Dual-Tier Sandboxed Execution"]
+        AST[Tier 1: AST Static Scanner]
+        DockerBox[Tier 2: Ephemeral Docker Container]
+    end
+
+    Router --> AgentSwarm
+    SwarmHub <-->|Live Context Ingestion| AgentSwarm
+    AgentSwarm --> AST --> DockerBox
+    DockerBox --> Output([📊 Interactive Sheet & BI Visualizations])
+```
+
+### 🤖 Specialized Swarm Roles
+
+| Agent | Responsibility | Key Superpower |
+| :--- | :--- | :--- |
+| 🧹 **DataAgent** | Automated data ingestion, table joins, and profiling. | Auto-detects table relationships, fixes Mojibake corruption, and flags non-additive columns to prevent calculation inflation. |
+| 💻 **CodeInterpreter** | Python script synthesis and computation. | Directly utilizes learned "Muscle Memory" functions in sandbox memory for instant, zero-shot code execution. |
+| 📊 **DashboardAgent** | KPI grid and multi-chart orchestration. | Employs an automated **Self-Fixer Loop** that catches schema mismatch errors and recovers without crashing. |
+| 🔍 **InvestigatorAgent** | Autonomous deep-dive and root-cause analysis. | Operates a **Bounded Investigation Loop** executing analytical moves (`breakdown`, `compare`, `outlier`, `composition`, `decompose`) without open-ended agent wandering. |
+| 🎯 **GoalExplorer** | High-level goal and strategic hypothesis decomposition. | Breaks ambiguous executive questions into structured, executable analytical milestones. |
+| 💡 **InsightAgent** | Executive business summary generation. | Guarded by a deterministic **Anti-Hallucination Harness** (`verify_numbers`) that drops ungrounded statements. |
+
+### 🧠 Swarm Memory & Continuous Skill Learning
+* **Ephemeral Broadcasts (Swarm Telepathy):** Agents broadcast live runtime insights to each other (e.g., DataAgent warning CodeAgent: *"Column 'Revenue' is non-additive due to 1-to-N join; use Weighted Average instead"*).
+* **Muscle Memory (Self-Created Skills):** When an agent devises an effective data transformation, it registers it as a reusable Python skill in execution memory. Subsequent prompts call these skills directly.
+* **Semantic Knowledge Graph (Neo4j):** Persists user domain preferences, reporting habits, and company metrics across sessions for hyper-personalized analysis.
 
 ---
 
@@ -30,53 +84,13 @@ Unlike ordinary AI chatbot wrappers that simply stream text, GraphSheet AI acts 
 
 | Capability | Description | Why It Matters |
 | :--- | :--- | :--- |
-| 🛡️ **Dual-Tier Container Sandbox** | Static AST AST syntax inspection + Ephemeral Sibling Docker isolation. | Runs untrusted LLM-generated code safely without risking host server compromises or infinite loops. |
+| 🐝 **Collaborative Swarm Telepathy** | Shared context space with live inter-agent broadcasts. | Eliminates data misunderstandings between cleaning, code generation, and visualization phases. |
+| 🛡️ **Dual-Tier Container Sandbox** | Static AST syntax inspection + Ephemeral Sibling Docker isolation. | Runs untrusted LLM-generated code safely without risking host server compromises or infinite loops. |
 | 🔀 **Resilient LLM Routing Pool** | Dynamic failover across OpenRouter, DeepSeek, OpenAI, Anthropic, and local models. | 99.9% uptime for AI operations with instant fallback during provider outages or rate limits. |
 | ⚡ **Real-Time Energy & FinOps Ledger** | SQLite `WAL`-backed ledger tracking micro-quotas per tenant/request. | Zero billing surprises; enforce hard token budgets and cost policies across your organization. |
 | 🎯 **Anti-Hallucination Verification** | Deterministic non-LLM calculation check harness (`verify_numbers`). | Eliminates fake metrics; verifies that AI claims match actual code output before showing to users. |
 | 🧹 **Automated Data Ops & Compression** | Native Mojibake text repair + BabelTele schema condenser. | Maximizes LLM context efficiency, saving up to 40% on token overhead while maintaining raw data accuracy. |
 | 📊 **Interactive Spreadsheet Workbench** | Integrated Univer spreadsheet canvas + real-time dynamic mini-charts. | Seamlessly inspect, edit, and explore formula-level data right alongside AI chat insights. |
-
----
-
-## 🏗️ System Architecture
-
-GraphSheet AI separates orchestration, safety enforcement, and execution into decoupled, fault-tolerant layers:
-
-```mermaid
-flowchart TD
-    subgraph Client["🖥️ Frontend (React 19 + Univer Sheet + BI)"]
-        UI[User Prompt & Data Upload]
-        Sheet[Live Interactive Spreadsheet & Charts]
-    end
-
-    subgraph Gateway["⚡ Gateway & FinOps Layer (FastAPI)"]
-        Energy[Energy Ledger - SQLite WAL Quota Check]
-        Router[Universal LLM Routing Pool]
-    end
-
-    subgraph AgentSwarm["🤖 Agent Intelligence Layer"]
-        Planner[Analysis & Code Generation Agent]
-        DataOps[Data Ops: Mojibake Fix & BabelTele Compression]
-        Harness[Verification Harness - Numeric Integrity Gate]
-    end
-
-    subgraph Security["🛡️ Dual-Tier Sandbox Execution Engine"]
-        AST[Tier 1: AST Static Vulnerability Scanner]
-        DockerBox[Tier 2: Ephemeral Docker Container Isolation]
-    end
-
-    UI -->|Upload CSV/Excel & Prompt| Gateway
-    Gateway --> Energy
-    Energy -->|Quota Approved| Router
-    Router --> Planner
-    Planner --> DataOps
-    DataOps --> Planner
-    Planner -->|Generated Code| Harness
-    Harness -->|Validate Math| AST
-    AST -->|Allowed Operations Only| DockerBox
-    DockerBox -->|Execution Artifacts & Metrics| Sheet
-```
 
 ---
 
@@ -108,10 +122,11 @@ API Documentation available at: **`http://localhost:8000/docs`**
 
 ## 💻 Tech Stack
 
-### 🚀 Backend & Core Engine
+### 🚀 Backend & Swarm Engine
 - **FastAPI**: Asynchronous high-performance REST API.
 - **Docker Engine API**: Ephemeral sibling container isolation for untrusted code execution.
 - **SQLite (WAL Mode)**: Ultra-fast, zero-overhead concurrent FinOps ledger.
+- **Neo4j Graph Database**: Semantic memory, user preferences, and skill catalog.
 - **Pandas / NumPy / Matplotlib**: High-throughput statistical computing engine.
 
 ### 🎨 Modern Frontend
@@ -140,5 +155,5 @@ Distributed under the **MIT License**. See `LICENSE` for more information.
 ---
 
 <p align="center">
-  <sub>Crafted with passion for reliable, secure, and production-grade AI systems.</sub>
+  <sub>Crafted with passion for reliable, secure, and production-grade Multi-Agent AI systems.</sub>
 </p>
