@@ -6,6 +6,13 @@ export interface TourStep {
   anchor?: string;
   title: string;
   body: string;
+  badge?: string;
+  onEnter?: () => void;
+  actionButton?: {
+    label: string;
+    loadingLabel?: string;
+    onClick: () => Promise<boolean | void> | boolean | void;
+  };
 }
 
 interface Rect {
@@ -49,11 +56,17 @@ function cardPosition(rect: Rect | null): { top: number; left: number } {
 export default function Tour({ steps, onFinish }: { steps: TourStep[]; onFinish: () => void }) {
   const [i, setI] = useState(0);
   const [rect, setRect] = useState<Rect | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
 
   const step = steps[i];
   const isLast = i === steps.length - 1;
 
   const sync = useCallback(() => setRect(readRect(step?.anchor)), [step?.anchor]);
+
+  // Execute optional onEnter trigger for this step (e.g. switching tabs or preview states)
+  useEffect(() => {
+    step?.onEnter?.();
+  }, [i, step]);
 
   // useLayoutEffect so the spotlight is measured before paint - with a plain
   // effect the highlight visibly jumps from the previous step's position.
@@ -90,13 +103,14 @@ export default function Tour({ steps, onFinish }: { steps: TourStep[]; onFinish:
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (actionLoading) return;
       if (e.key === "Escape") onFinish();
       else if (e.key === "Enter" || e.key === "ArrowRight") next();
       else if (e.key === "ArrowLeft") setI((v) => Math.max(0, v - 1));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [next, onFinish]);
+  }, [next, onFinish, actionLoading]);
 
   if (!step) return null;
   const pos = cardPosition(rect);
@@ -108,20 +122,8 @@ export default function Tour({ steps, onFinish }: { steps: TourStep[]; onFinish:
       aria-modal="true"
       aria-label="Hướng dẫn sử dụng"
     >
-      {/* Transparent full-screen catcher: the dimming itself comes from the
-          spotlight's outward shadow, which is paint-only and never receives
-          clicks - without this, every click on the "dimmed" area would fall
-          straight through into the app while the tour is still open.
-
-          Deliberately NOT a dismiss target. The tour auto-opens on first visit
-          and being dismissed is remembered forever, so a single stray click
-          anywhere on the page would silently cost the user the whole
-          onboarding. Leaving is explicit: the "Bỏ qua" button or Esc. */}
       <div className="tour__catcher" />
 
-      {/* One element does the ring AND the dimming, so the cut-out can never
-          drift out of sync the way four separate panels would. Paint-only:
-          it must not steal the click from the control it is pointing at. */}
       {rect && (
         <div
           className="tour__spot"
@@ -130,22 +132,85 @@ export default function Tour({ steps, onFinish }: { steps: TourStep[]; onFinish:
       )}
 
       <div className="tour__card" style={{ top: pos.top, left: pos.left, width: CARD_W }}>
-        <div className="tour__step-count">
-          Bước {i + 1}/{steps.length}
+        <div className="tour__step-count" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>Bước {i + 1}/{steps.length}</span>
+          {step.badge && (
+            <span
+              style={{
+                background: "rgba(16, 185, 129, 0.15)",
+                color: "#34d399",
+                padding: "1px 7px",
+                borderRadius: "4px",
+                fontSize: "0.68rem",
+                fontWeight: 600,
+                border: "1px solid rgba(16, 185, 129, 0.3)",
+                letterSpacing: "0.02em",
+              }}
+            >
+              {step.badge}
+            </span>
+          )}
         </div>
         <h3 className="tour__title">{step.title}</h3>
         <p className="tour__body">{step.body}</p>
+
+        {step.actionButton && (
+          <div style={{ marginBottom: "0.85rem" }}>
+            <button
+              className="button button--small button--primary"
+              style={{
+                width: "100%",
+                padding: "0.5rem 0.75rem",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "6px",
+                fontWeight: 600,
+                fontSize: "0.84rem",
+                background: "linear-gradient(135deg, #10b981, #059669)",
+                borderColor: "#10b981",
+                boxShadow: "0 2px 8px rgba(16, 185, 129, 0.35)",
+              }}
+              disabled={actionLoading}
+              onClick={async () => {
+                if (actionLoading) return;
+                setActionLoading(true);
+                try {
+                  const res = await step.actionButton!.onClick();
+                  if (res !== false) {
+                    next();
+                  }
+                } finally {
+                  setActionLoading(false);
+                }
+              }}
+            >
+              {actionLoading
+                ? step.actionButton.loadingLabel || "Đang xử lý..."
+                : step.actionButton.label}
+            </button>
+          </div>
+        )}
+
         <div className="tour__actions">
-          <button className="tour__skip" onClick={onFinish}>
+          <button className="tour__skip" onClick={onFinish} disabled={actionLoading}>
             Bỏ qua
           </button>
           <div className="tour__nav">
             {i > 0 && (
-              <button className="button button--small button--secondary" onClick={() => setI(i - 1)}>
+              <button
+                className="button button--small button--secondary"
+                onClick={() => setI(i - 1)}
+                disabled={actionLoading}
+              >
                 Quay lại
               </button>
             )}
-            <button className="button button--small button--primary" onClick={next}>
+            <button
+              className="button button--small button--primary"
+              onClick={next}
+              disabled={actionLoading}
+            >
               {isLast ? "Bắt đầu dùng" : "Tiếp"}
             </button>
           </div>

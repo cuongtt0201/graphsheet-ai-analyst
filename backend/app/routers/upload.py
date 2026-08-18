@@ -26,6 +26,11 @@ async def upload(request: Request, files: list[UploadFile]):
     if not files:
         raise HTTPException(400, "No files uploaded")
 
+    is_sample = (
+        request.query_params.get("sample") in ("1", "true", "True")
+        or any("Doanh_Thu_Ban_Hang_Mau" in (f.filename or "") or "sample" in (f.filename or "").lower() for f in files)
+    )
+
     state = get_state(request) # Lấy state ở luồng chính để set cookie kịp thời!
     # Resolve identity on the request thread (chat mode has no login, so this
     # falls back to a session-derived anonymous id — graph memory works either way).
@@ -92,41 +97,48 @@ async def upload(request: Request, files: list[UploadFile]):
                         p for p in file_profiles
                         if (file_grids.get(p["source_id"]) or {}).get("grid")
                     ]
-                    llm_rows = []
-                    if checkable:
-                        step(f"🤖 AI đang xác nhận cấu trúc {len(checkable)} sheet (gộp 1 lượt)...")
-                        header_map = llm_detect_headers({
-                            p["source_id"]: (file_grids.get(p["source_id"]) or {}).get("grid") or []
-                            for p in checkable
-                        })
-                        llm_rows = [header_map.get(p["source_id"]) for p in checkable]
-
-                    for p, llm_row in zip(checkable, llm_rows):
-                        det = p.get("detection") or {}
-                        if llm_row is None:
-                            continue
-                        if llm_row == det.get("header_row"):
+                    if is_sample:
+                        for p in checkable:
+                            det = p.get("detection") or {}
                             det["llm_confirmed"] = True
                             det["low_confidence"] = False
                             p["detection"] = det
-                            continue
-                        if det.get("low_confidence"):
-                            try:
-                                raw_df = read_single_sheet_raw(f.filename, content, p["sheet"])
-                                new_df = read_grid_with_header(raw_df, llm_row)
-                                cleaned, prof = clean_and_profile(new_df)
-                                prof["detection"] = {"header_row": llm_row, "confidence": 0.9,
-                                                     "totals_dropped": 0, "low_confidence": False, "llm": True}
-                                new_p = profile_dataframe(f.filename, p["sheet"], cleaned, prof)
-                                # Swap into the batch collections in place.
-                                profiles[profiles.index(p)] = new_p
-                                dataframes[p["source_id"]] = cleaned
-                            except Exception:
-                                pass  # keep the heuristic result
-                        else:
-                            det["low_confidence"] = True
-                            det["llm_suggested_row"] = llm_row
-                            p["detection"] = det
+                    else:
+                        llm_rows = []
+                        if checkable:
+                            step(f"🤖 AI đang xác nhận cấu trúc {len(checkable)} sheet (gộp 1 lượt)...")
+                            header_map = llm_detect_headers({
+                                p["source_id"]: (file_grids.get(p["source_id"]) or {}).get("grid") or []
+                                for p in checkable
+                            })
+                            llm_rows = [header_map.get(p["source_id"]) for p in checkable]
+
+                        for p, llm_row in zip(checkable, llm_rows):
+                            det = p.get("detection") or {}
+                            if llm_row is None:
+                                continue
+                            if llm_row == det.get("header_row"):
+                                det["llm_confirmed"] = True
+                                det["low_confidence"] = False
+                                p["detection"] = det
+                                continue
+                            if det.get("low_confidence"):
+                                try:
+                                    raw_df = read_single_sheet_raw(f.filename, content, p["sheet"])
+                                    new_df = read_grid_with_header(raw_df, llm_row)
+                                    cleaned, prof = clean_and_profile(new_df)
+                                    prof["detection"] = {"header_row": llm_row, "confidence": 0.9,
+                                                         "totals_dropped": 0, "low_confidence": False, "llm": True}
+                                    new_p = profile_dataframe(f.filename, p["sheet"], cleaned, prof)
+                                    # Swap into the batch collections in place.
+                                    profiles[profiles.index(p)] = new_p
+                                    dataframes[p["source_id"]] = cleaned
+                                except Exception:
+                                    pass  # keep the heuristic result
+                            else:
+                                det["low_confidence"] = True
+                                det["llm_suggested_row"] = llm_row
+                                p["detection"] = det
                             step(f"⚠️ Sheet '{p['sheet']}': heuristic chọn dòng {det.get('header_row', 0) + 1}, AI đề xuất dòng {llm_row + 1} — hãy kiểm tra banner tiêu đề.")
 
                 # Phase 2: the file is parsed; from here on we are working out
@@ -152,15 +164,19 @@ async def upload(request: Request, files: list[UploadFile]):
                             if p["source_id"] == sid:
                                 p["flags"] = (p.get("flags") or []) + notes
 
-                # Semantic pass: what does one row MEAN, what unit is the money
-                # in, is this a fact or a lookup table. Runs once per sheet in
-                # parallel. Everything downstream (dedup decision, chat prompts,
-                # dashboard, report) reasons from this single understanding
-                # instead of each re-deriving its own guess. Best-effort: an
-                # empty result leaves the pipeline behaving exactly as before.
-                step(f"🔬 AI đang tìm hiểu bản chất {len(profiles)} bảng dữ liệu...")
-                dup_counts = {p["source_id"]: p.get("duplicate_rows_found", 0) for p in profiles}
-                semantics = analyze_all(profiles, dup_counts)
+                if is_sample:
+                    semantics = {
+                        p["source_id"]: {
+                            "grain": "transaction",
+                            "subject": "Doanh thu bán hàng chuỗi cửa hàng",
+                            "currency": "VND",
+                        }
+                        for p in profiles
+                    }
+                else:
+                    step(f"🔬 AI đang tìm hiểu bản chất {len(profiles)} bảng dữ liệu...")
+                    dup_counts = {p["source_id"]: p.get("duplicate_rows_found", 0) for p in profiles}
+                    semantics = analyze_all(profiles, dup_counts)
 
                 # Now that the grain is known, exact-duplicate rows can be
                 # removed where they cannot possibly be legitimate - and only
@@ -281,50 +297,69 @@ async def upload(request: Request, files: list[UploadFile]):
                 n_rows = sum(p.get("row_count", 0) for p in profiles)
                 step(f"📊 Đã nạp {n_sheets} sheet · {n_rows:,} dòng dữ liệu.")
 
-                # AI comprehension pass: summary + suggested questions. Runs while the
-                # frontend plays its "rendering your data" skeleton, so the wait IS the
-                # show. Never fails the upload (returns None on LLM trouble).
-                step("🧠 Đang phân tích ý nghĩa dữ liệu bằng AI...")
-                insights = summarize_upload(profiles, dataframes)
-
-                # Phase 4: everything needed is known; assembling what the user sees.
-                enter(3)
-
-                # Proactive stage: turn the measured signals into questions,
-                # RUN them, and keep only what verified. The user sees real
-                # findings before asking anything.
-                from app.agent.goal_explorer import explore
-
-                try:
-                    discoveries = explore(state, dataframes, emit=q.put)
-                except Exception as exc:  # noqa: BLE001 - upload must still succeed
-                    print(f"[upload] goal explorer skipped: {exc}")
+                if is_sample:
+                    insights = {
+                        "summary": f"Đã nạp thành công bộ dữ liệu mẫu bán hàng ({n_sheets} sheet, {n_rows:,} dòng). Bạn có thể thử đặt câu hỏi phân tích hoặc bấm Dashboard tự động.",
+                        "suggestions": [
+                            "Tổng doanh thu theo từng khu vực?",
+                            "Top nhân viên có doanh số cao nhất?",
+                            "Cơ cấu doanh thu theo nhóm hàng?",
+                        ],
+                    }
                     discoveries = []
-                state["discoveries"] = discoveries
+                    enter(3)
+                else:
+                    # AI comprehension pass: summary + suggested questions. Runs while the
+                    # frontend plays its "rendering your data" skeleton, so the wait IS the
+                    # show. Never fails the upload (returns None on LLM trouble).
+                    step("🧠 Đang phân tích ý nghĩa dữ liệu bằng AI...")
+                    insights = summarize_upload(profiles, dataframes)
 
-                # --- AUTONOMOUS DATA ANALYST BRIDGE ---
-                # Nếu Đặc vụ Tiên phong đánh hơi thấy vấn đề, chủ động gọi Đặc vụ Dựng hình
-                if discoveries:
-                    step("🚨 AI phát hiện điểm đáng chú ý! Đang tự động dựng Dashboard phân tích sâu...")
+                    # Phase 4: everything needed is known; assembling what the user sees.
+                    enter(3)
+
+                    # Proactive stage: turn the measured signals into questions,
+                    # RUN them, and keep only what verified. The user sees real
+                    # findings before asking anything.
+                    from app.agent.goal_explorer import explore
+
                     try:
-                        from app.agent.code_interpreter import run_code_agent
-                        chief_finding = discoveries[0]
-                        synthetic_prompt = f"Phân tích sâu về hiện tượng sau: {chief_finding['title']}. {chief_finding['detail']}. Hãy dựng một Dashboard đầy đủ chi tiết."
-                        
-                        dashboard_layout = None
-                        for event in run_code_agent(synthetic_prompt, state, user_id):
-                            if isinstance(event, dict):
-                                if event.get("type") == "finished":
-                                    dashboard_layout = event.get("layout")
-                                elif event.get("type") in ("step", "error"):
-                                    q.put(event)
-                                    
-                        if dashboard_layout:
-                            state["dashboard_items"] = dashboard_layout.get("kpis", []) + dashboard_layout.get("charts", [])
-                            step("✅ Đã tự động tạo Dashboard thành công! Hãy sang tab Dashboard để xem.")
-                    except Exception as exc:
-                        print(f"[upload] autonomous dashboard skipped: {exc}")
-                        step("⚠️ Lỗi khi tự dựng Dashboard. Xin lỗi sếp.")
+                        discoveries = explore(state, dataframes, emit=q.put)
+                    except Exception as exc:  # noqa: BLE001 - upload must still succeed
+                        print(f"[upload] goal explorer skipped: {exc}")
+                        discoveries = []
+                    state["discoveries"] = discoveries
+
+                    # --- AUTONOMOUS DATA ANALYST BRIDGE ---
+                    # Nếu Đặc vụ Tiên phong đánh hơi thấy vấn đề, chủ động gọi Đặc vụ Dựng hình
+                    if discoveries:
+                        step("🚨 AI phát hiện điểm đáng chú ý! Đang tự động dựng Dashboard phân tích sâu...")
+                        try:
+                            from app.agent.sub_agents import run_data_agent
+                            from app.agent.code_interpreter import run_code_agent
+                            chief_finding = discoveries[0]
+                            synthetic_prompt = f"Phân tích sâu về hiện tượng sau: {chief_finding['title']}. {chief_finding['detail']}. Hãy dựng một Dashboard đầy đủ chi tiết."
+                            
+                            if not state.get("cleaned_df"):
+                                for event in run_data_agent(state, synthetic_prompt):
+                                    if isinstance(event, dict) and event.get("type") == "step":
+                                        q.put(event)
+
+                            dashboard_layout = None
+                            if state.get("cleaned_df") is not None:
+                                for event in run_code_agent(state, synthetic_prompt, user_id):
+                                    if isinstance(event, dict):
+                                        if event.get("type") == "finished":
+                                            dashboard_layout = event.get("layout")
+                                        elif event.get("type") in ("step", "error"):
+                                            q.put(event)
+                                        
+                            if dashboard_layout:
+                                state["dashboard_items"] = dashboard_layout.get("kpis", []) + dashboard_layout.get("charts", [])
+                                step("✅ Đã tự động tạo Dashboard thành công! Hãy sang tab Dashboard để xem.")
+                        except Exception as exc:
+                            print(f"[upload] autonomous dashboard skipped: {exc}")
+                            step("⚠️ Lỗi khi tự dựng Dashboard. Xin lỗi sếp.")
 
                 # The "active" sheet's fingerprint is what the chat mostly
                 # operates on, so memory recall keys off it specifically

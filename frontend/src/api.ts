@@ -334,6 +334,7 @@ export const api = {
      *  stage index and the engine telemetry too, and re-deriving those from the
      *  message would put the guesswork back in the UI. */
     onEvent: (e: LiveAgentEvent) => void,
+    isSample?: boolean,
   ): Promise<{
     files: FileProfile[];
     active?: string | null;
@@ -342,8 +343,10 @@ export const api = {
   }> => {
     const form = new FormData();
     files.forEach((f) => form.append("files", f));
+    if (isSample) form.append("is_sample", "true");
 
-    const res = await fetch(`${BASE_URL}/api/upload`, {
+    const url = isSample ? `${BASE_URL}/api/upload?sample=true` : `${BASE_URL}/api/upload`;
+    const res = await fetch(url, {
       method: "POST",
       body: form,
       credentials: "include",

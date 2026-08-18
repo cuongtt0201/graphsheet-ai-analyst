@@ -12,7 +12,6 @@ import {
   type ChartRole,
   type ChartSize,
   type DashboardFilters,
-  type Discovery,
   type SavedReport,
   type TableResult,
 } from "../api";
@@ -556,53 +555,122 @@ function MemoryGraphCanvas({ nodes: rawNodes, edges: rawEdges }: { nodes: any[];
   );
 }
 
-// Versioned: v1 could be dismissed by any stray click and remembered that
-// forever, so anyone carrying a v1 flag never really saw the tour. Bumping the
-// key re-shows it once for them under the fixed behaviour.
-const TOUR_SEEN_KEY = "gs_tour_seen_v2";
+// Versioned: bumping the key re-shows the tour once for users.
+const TOUR_SEEN_KEY = "gs_tour_seen_v4";
 
-/** Ordered so a newcomer follows the actual happy path: bring data in, ask a
- * question, then discover the heavier features. Steps whose control isn't on
- * screen yet (the dashboard tab before anything is pinned) still show their
- * explanation, just centered instead of spotlighted. */
-const TOUR_STEPS: TourStep[] = [
+const DEMO_GRID_DATA: (string | number)[][] = [
+  ["Ngày", "Mã Đơn", "Khu Vực", "Cửa Hàng", "Nhân Viên", "Nhóm Hàng", "Tên Sản Phẩm", "Số Lượng", "Đơn Giá", "Thành Tiền", "Kênh Bán"],
+  ["2024-01-05", "DH1001", "Hà Nội", "Chi nhánh Cầu Giấy", "Nguyễn Văn An", "Đồ uống", "Cà phê Espresso", 2, 35000, 70000, "Tại quầy"],
+  ["2024-01-05", "DH1002", "TP. Hồ Chí Minh", "Chi nhánh Quận 1", "Trần Thị Mai", "Đồ uống", "Trà Đào Cam Sả", 3, 45000, 135000, "GrabFood"],
+  ["2024-01-06", "DH1003", "Đà Nẵng", "Chi nhánh Hải Châu", "Lê Hoàng Nam", "Bánh ngọt", "Bánh Croissant", 4, 32000, 128000, "Tại quầy"],
+  ["2024-01-07", "DH1004", "TP. Hồ Chí Minh", "Chi nhánh Quận 3", "Phạm Thu Trang", "Đồ uống", "Cà phê Sữa Đá", 5, 29000, 145000, "ShopeeFood"],
+  ["2024-01-08", "DH1005", "Hà Nội", "Chi nhánh Hoàn Kiếm", "Đỗ Minh Quân", "Cà phê hạt", "Hạt Arabica Cầu Đất (500g)", 2, 180000, 360000, "Shopee"],
+  ["2024-01-10", "DH1006", "Cần Thơ", "Chi nhánh Ninh Kiều", "Vũ Hải Đăng", "Đồ uống", "Trà Sữa Matcha", 4, 55000, 220000, "Tại quầy"],
+  ["2024-01-12", "DH1007", "Hà Nội", "Chi nhánh Cầu Giấy", "Nguyễn Văn An", "Đồ ăn nhẹ", "Combo Bữa Sáng", 3, 65000, 195000, "Tại quầy"],
+  ["2024-01-15", "DH1008", "TP. Hồ Chí Minh", "Chi nhánh Quận 1", "Trần Thị Mai", "Cà phê hạt", "Hạt Robusta Honey (500g)", 3, 145000, 435000, "Website"],
+  ["2024-01-18", "DH1009", "Hải Phòng", "Chi nhánh Hồng Bàng", "Bùi Hồng Phúc", "Đồ uống", "Cà phê Espresso", 6, 35000, 210000, "Tại quầy"],
+  ["2024-01-20", "DH1010", "Đà Nẵng", "Chi nhánh Hải Châu", "Lê Hoàng Nam", "Đồ uống", "Trà Đào Cam Sả", 5, 45000, 225000, "Tại quầy"],
+  ["2024-01-22", "DH1011", "TP. Hồ Chí Minh", "Chi nhánh Quận 3", "Phạm Thu Trang", "Bánh ngọt", "Bánh Tiramisu", 4, 48000, 192000, "GrabFood"],
+  ["2024-01-25", "DH1012", "Hà Nội", "Chi nhánh Hoàn Kiếm", "Đỗ Minh Quân", "Đồ uống", "Trà Sen Vàng", 8, 49000, 392000, "Tại quầy"],
+  ["2024-02-02", "DH1013", "Cần Thơ", "Chi nhánh Ninh Kiều", "Vũ Hải Đăng", "Đồ uống", "Cà phê Sữa Đá", 10, 29000, 290000, "Tại quầy"],
+  ["2024-02-05", "DH1014", "Hà Nội", "Chi nhánh Cầu Giấy", "Nguyễn Văn An", "Bánh ngọt", "Bánh Croissant", 6, 32000, 192000, "GrabFood"],
+  ["2024-02-08", "DH1015", "TP. Hồ Chí Minh", "Chi nhánh Quận 1", "Trần Thị Mai", "Đồ ăn nhẹ", "Combo Bữa Sáng", 5, 65000, 325000, "Tại quầy"],
+  ["2024-02-12", "DH1016", "Đà Nẵng", "Chi nhánh Hải Châu", "Lê Hoàng Nam", "Cà phê hạt", "Hạt Arabica Cầu Đất (500g)", 4, 180000, 720000, "Website"],
+  ["2024-02-15", "DH1017", "TP. Hồ Chí Minh", "Chi nhánh Quận 3", "Phạm Thu Trang", "Đồ uống", "Trà Sữa Matcha", 7, 55000, 385000, "ShopeeFood"],
+  ["2024-02-18", "DH1018", "Hải Phòng", "Chi nhánh Hồng Bàng", "Bùi Hồng Phúc", "Đồ uống", "Trà Đào Cam Sả", 8, 45000, 360000, "Tại quầy"],
+  ["2024-02-22", "DH1019", "Hà Nội", "Chi nhánh Hoàn Kiếm", "Đỗ Minh Quân", "Đồ uống", "Cà phê Sữa Đá", 12, 29000, 348000, "ShopeeFood"],
+  ["2024-02-26", "DH1020", "Cần Thơ", "Chi nhánh Ninh Kiều", "Vũ Hải Đăng", "Bánh ngọt", "Bánh Tiramisu", 5, 48000, 240000, "Tại quầy"],
+  ["2024-03-01", "DH1021", "TP. Hồ Chí Minh", "Chi nhánh Quận 1", "Trần Thị Mai", "Đồ uống", "Cà phê Espresso", 15, 35000, 525000, "Tại quầy"],
+  ["2024-03-05", "DH1022", "Hà Nội", "Chi nhánh Cầu Giấy", "Nguyễn Văn An", "Đồ uống", "Trà Sen Vàng", 10, 49000, 490000, "GrabFood"],
+  ["2024-03-08", "DH1023", "Đà Nẵng", "Chi nhánh Hải Châu", "Lê Hoàng Nam", "Đồ ăn nhẹ", "Combo Bữa Sáng", 8, 65000, 520000, "Tại quầy"],
+  ["2024-03-12", "DH1024", "TP. Hồ Chí Minh", "Chi nhánh Quận 3", "Phạm Thu Trang", "Cà phê hạt", "Hạt Robusta Honey (500g)", 6, 145000, 870000, "Website"],
+  ["2024-03-15", "DH1025", "Hải Phòng", "Chi nhánh Hồng Bàng", "Bùi Hồng Phúc", "Đồ uống", "Trà Sữa Matcha", 9, 55000, 495000, "Tại quầy"],
+  ["2024-03-18", "DH1026", "Hà Nội", "Chi nhánh Hoàn Kiếm", "Đỗ Minh Quân", "Bánh ngọt", "Bánh Croissant", 10, 32000, 320000, "Tại quầy"],
+  ["2024-03-22", "DH1027", "Cần Thơ", "Chi nhánh Ninh Kiều", "Vũ Hải Đăng", "Đồ uống", "Trà Đào Cam Sả", 11, 45000, 495000, "ShopeeFood"],
+  ["2024-03-25", "DH1028", "TP. Hồ Chí Minh", "Chi nhánh Quận 1", "Trần Thị Mai", "Đồ uống", "Cà phê Sữa Đá", 14, 29000, 406000, "GrabFood"],
+  ["2024-03-28", "DH1029", "Hà Nội", "Chi nhánh Cầu Giấy", "Nguyễn Văn An", "Cà phê hạt", "Hạt Arabica Cầu Đất (500g)", 5, 180000, 900000, "Website"],
+  ["2024-03-30", "DH1030", "Đà Nẵng", "Chi nhánh Hải Châu", "Lê Hoàng Nam", "Bánh ngọt", "Bánh Tiramisu", 7, 48000, 336000, "Tại quầy"],
+];
+
+const DEMO_PROFILE: FileProfile = {
+  source_id: "demo_sales_sheet",
+  filename: "Doanh_Thu_Ban_Hang_Mau.csv",
+  sheet: "DoanhThuBanHang",
+  row_count: 30,
+  columns: ["Ngày", "Mã Đơn", "Khu Vực", "Cửa Hàng", "Nhân Viên", "Nhóm Hàng", "Tên Sản Phẩm", "Số Lượng", "Đơn Giá", "Thành Tiền", "Kênh Bán"],
+  dtypes: {
+    "Ngày": "object",
+    "Mã Đơn": "object",
+    "Khu Vực": "object",
+    "Cửa Hàng": "object",
+    "Nhân Viên": "object",
+    "Nhóm Hàng": "object",
+    "Tên Sản Phẩm": "object",
+    "Số Lượng": "int64",
+    "Đơn Giá": "int64",
+    "Thành Tiền": "int64",
+    "Kênh Bán": "object",
+  },
+  sample_rows: [
+    { "Ngày": "2024-01-05", "Mã Đơn": "DH1001", "Khu Vực": "Hà Nội", "Cửa Hàng": "Chi nhánh Cầu Giấy", "Nhân Viên": "Nguyễn Văn An", "Nhóm Hàng": "Đồ uống", "Tên Sản Phẩm": "Cà phê Espresso", "Số Lượng": "2", "Đơn Giá": "35000", "Thành Tiền": "70000", "Kênh Bán": "Tại quầy" },
+  ],
+  has_data: true,
+  grid_rows: 30,
+  grid: DEMO_GRID_DATA,
+};
+
+const DEMO_DASHBOARD_ITEMS: DashboardItem[] = [
   {
-    title: "Chào mừng đến GraphSheet 👋",
-    body: "Bạn tải file Excel/CSV lên, rồi hỏi bằng tiếng Việt bình thường — không cần biết công thức hay Pivot. Mọi con số đều do máy tính thật, AI chỉ diễn giải lại. Xem nhanh 6 bước nhé.",
+    id: "demo-kpi-1",
+    type: "kpi",
+    title: "Tổng Doanh Thu",
+    scalar: "10,858,000 đ",
   },
   {
-    anchor: "upload",
-    title: "1. Tải dữ liệu lên",
-    body: "Bấm đây để chọn file Excel/CSV. File lộn xộn kiểu có dòng tiêu đề công ty, dòng tổng cộng, tiêu đề 2 tầng đều đọc được — hệ thống tự dò dòng tiêu đề và báo cho bạn kiểm tra nếu chưa chắc.",
+    id: "demo-kpi-2",
+    type: "kpi",
+    title: "Tổng Số Giao Dịch",
+    scalar: "30 đơn hàng",
   },
   {
-    anchor: "chat-input",
-    title: "2. Hỏi bằng tiếng Việt",
-    body: "Gõ như nói chuyện: \"doanh thu theo khu vực?\", \"top 10 cửa hàng bán chạy nhất\". Chưa có file mà muốn thử ngay thì gõ \"tạo dữ liệu mẫu về doanh thu\" là có bảng để nghịch.",
+    id: "demo-kpi-3",
+    type: "kpi",
+    title: "Sản Phẩm Bán Chạy Nhất",
+    scalar: "Cà phê Sữa Đá",
   },
   {
-    anchor: "sheet-tabs",
-    title: "3. Xem dữ liệu thật",
-    body: "Mỗi sheet là một thẻ ở đây. Kết quả mỗi câu hỏi cũng thành một thẻ riêng, nên bạn luôn đối chiếu được câu trả lời với dữ liệu gốc.",
+    id: "demo-chart-1",
+    type: "chart",
+    title: "Cơ Cấu Doanh Thu Theo Khu Vực",
+    chart: {
+      type: "bar",
+      title: "Doanh Thu Theo Khu Vực",
+      labels: ["TP. Hồ Chí Minh", "Hà Nội", "Đà Nẵng", "Hải Phòng", "Cần Thơ"],
+      values: [3520000, 3180000, 1850000, 1150000, 1158000],
+      series: [
+        {
+          name: "Doanh thu (VNĐ)",
+          values: [3520000, 3180000, 1850000, 1150000, 1158000],
+        },
+      ],
+    },
   },
   {
-    anchor: "build-dashboard",
-    title: "4. Dashboard tự động",
-    body: "Một cú bấm: AI tự chọn chỉ số, tính toán, vẽ biểu đồ và viết nhận xét. Muốn chỉ định thì gõ yêu cầu vào ô chat trước rồi mới bấm.",
-  },
-  {
-    anchor: "dashboard-tab",
-    title: "5. Xuất báo cáo",
-    body: "Trong thẻ Dashboard bạn đổi được bố cục, bảng màu, tải Excel kèm biểu đồ, hoặc nhờ AI viết luôn báo cáo trình sếp dưới dạng Word.",
-  },
-  {
-    anchor: "memory-tab",
-    title: "6. Càng dùng càng hiểu bạn",
-    body: "Hệ thống ghi nhớ thói quen phân tích và tự học thêm kỹ năng mới sau mỗi phiên. Vào đây xem nó đã học được gì — và xoá nếu bạn không muốn giữ.",
-  },
-  {
-    title: "Xong rồi! 🎉",
-    body: "Bắt đầu bằng việc tải một file lên. Cần xem lại hướng dẫn thì bấm nút ❓ ở góc trên bên phải bất cứ lúc nào.",
+    id: "demo-chart-2",
+    type: "chart",
+    title: "Tỷ Trọng Doanh Thu Theo Nhóm Hàng",
+    chart: {
+      type: "pie",
+      title: "Tỷ Trọng Nhóm Hàng",
+      labels: ["Cà phê hạt", "Đồ uống", "Đồ ăn nhẹ", "Bánh ngọt"],
+      values: [4500000, 3950000, 1200000, 1208000],
+      series: [
+        {
+          name: "Doanh thu",
+          values: [4500000, 3950000, 1200000, 1208000],
+        },
+      ],
+    },
   },
 ];
 
@@ -610,6 +678,7 @@ interface Message {
   role: "user" | "assistant";
   reply?: ChatReply;
   text?: string;
+  suggestions?: string[];
   /** Sheet-tab key of the result table this reply produced. */
   resultKey?: string;
   /** Live thought summaries collected while this answer was being produced,
@@ -835,6 +904,55 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
   // First visit opens the tour once; the ❓ button reopens it on demand.
   const [showTour, setShowTour] = useState(() => !localStorage.getItem(TOUR_SEEN_KEY));
 
+  // Snapshot used by the Tutorial Sandbox (Lớp ảo Tour) to restore the user's workspace upon exit
+  const tourSnapshotRef = useRef<{
+    tables: FileProfile[];
+    activeKey: string;
+    gridCache: Record<string, (string | number)[][]>;
+    messages: Message[];
+    dashboardItems: DashboardItem[];
+    sidebarTab: "sources" | "memory";
+  } | null>(null);
+  const isTourDemoActiveRef = useRef(false);
+
+  const startTour = () => {
+    tourSnapshotRef.current = {
+      tables,
+      activeKey,
+      gridCache,
+      messages,
+      dashboardItems,
+      sidebarTab,
+    };
+    isTourDemoActiveRef.current = false;
+    setShowTour(true);
+  };
+
+  const finishTour = () => {
+    if (isTourDemoActiveRef.current) {
+      if (tourSnapshotRef.current && tourSnapshotRef.current.tables.length > 0) {
+        setTables(tourSnapshotRef.current.tables);
+        setSelectedSources(tourSnapshotRef.current.tables.map((t) => t.source_id));
+        setActiveKey(tourSnapshotRef.current.activeKey);
+        setGridCache(tourSnapshotRef.current.gridCache);
+        setMessages(tourSnapshotRef.current.messages);
+        setDashboardItems(tourSnapshotRef.current.dashboardItems);
+        setSidebarTab(tourSnapshotRef.current.sidebarTab);
+      } else {
+        setTables([]);
+        setSelectedSources([]);
+        setActiveKey("");
+        setGridCache({});
+        setMessages([]);
+        setDashboardItems([]);
+        setSidebarTab("sources");
+      }
+      isTourDemoActiveRef.current = false;
+    }
+    setShowTour(false);
+    localStorage.setItem(TOUR_SEEN_KEY, "1");
+  };
+
   // --- Live chat progress (streamed from /api/chat while `busy`) ---
   const [chatStage, setChatStage] = useState("");
   const [chatReason, setChatReason] = useState("");
@@ -842,10 +960,7 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
-  // --- Overlay states (suggestions + chart/KPI shown on the sheet side) ---
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [summaryText, setSummaryText] = useState("");
-  const [discoveries, setDiscoveries] = useState<Discovery[]>([]);
+  // --- Overlay states (chart/KPI shown on the sheet side) ---
   const [displayChart, setDisplayChart] = useState<ChartSpec | null>(null);
   const [displayScalar, setDisplayScalar] = useState<number | string | null>(null);
   const [displayScalarLabel, setDisplayScalarLabel] = useState("");
@@ -922,7 +1037,6 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
     const prompt = (promptOverride ?? input).trim();
     if (buildingDashboard) return;
     if (!promptOverride) setInput("");
-    setSuggestions([]);
     setBuildingDashboard(true);
     setBuildStatus("🤖 Đang lên kế hoạch dashboard...");
     setReport(null);
@@ -1042,38 +1156,43 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, busy]);
 
-  async function handleUpload(files: FileList | null) {
-    if (!files || files.length === 0) return;
+  async function handleUpload(files: FileList | File[] | null, isSample?: boolean) {
+    if (!files || (Array.isArray(files) ? files.length === 0 : files.length === 0)) return;
+    const fileArray = Array.isArray(files) ? files : Array.from(files);
     setUploading(true);
-    setStatusText("Đang bắt đầu tải lên...");
+    setStatusText(isSample ? "Đang nạp dữ liệu mẫu..." : "Đang bắt đầu tải lên...");
     setWorkStage(0);
     setWorkThoughts([]);
     setWorkEngine({});
     try {
-      const res = await api.upload(Array.from(files), (e) => {
-        if (e.type === "engine") {
-          setWorkEngine((prev) => ({
-            model: e.model ?? prev.model,
-            provider: e.provider ?? prev.provider,
-            // A "busy" or "asking" event carries no usage yet — keep the last
-            // measured numbers rather than blanking the strip mid-flight.
-            tokensIn: e.tokens_in ?? prev.tokensIn,
-            tokensOut: e.tokens_out ?? prev.tokensOut,
-            secs: e.secs ?? prev.secs,
-            attempt: e.attempt ?? prev.attempt,
-            busy: e.state === "busy",
-          }));
-          return;
-        }
-        if (e.type !== "step") return;
-        if (typeof e.stage === "number") setWorkStage(e.stage);
-        if (e.kind === "thought") {
-          // Thoughts accumulate; the step line keeps showing what they are for.
-          setWorkThoughts((prev) => [...prev, e.message.replace(/^💭\s*/, "")].slice(-12));
-        } else {
-          setStatusText(e.message);
-        }
-      });
+      const res = await api.upload(
+        fileArray,
+        (e) => {
+          if (e.type === "engine") {
+            setWorkEngine((prev) => ({
+              model: e.model ?? prev.model,
+              provider: e.provider ?? prev.provider,
+              // A "busy" or "asking" event carries no usage yet — keep the last
+              // measured numbers rather than blanking the strip mid-flight.
+              tokensIn: e.tokens_in ?? prev.tokensIn,
+              tokensOut: e.tokens_out ?? prev.tokensOut,
+              secs: e.secs ?? prev.secs,
+              attempt: e.attempt ?? prev.attempt,
+              busy: e.state === "busy",
+            }));
+            return;
+          }
+          if (e.type !== "step") return;
+          if (typeof e.stage === "number") setWorkStage(e.stage);
+          if (e.kind === "thought") {
+            // Thoughts accumulate; the step line keeps showing what they are for.
+            setWorkThoughts((prev) => [...prev, e.message.replace(/^💭\s*/, "")].slice(-12));
+          } else {
+            setStatusText(e.message);
+          }
+        },
+        isSample
+      );
       // res.files is the FULL merged session (backend appends new files to
       // the old ones instead of replacing). Pinned dashboard/results survive.
       const profiles = res.files;
@@ -1092,18 +1211,14 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
       const nSheets = profiles.length;
       const nFiles = new Set(profiles.map((p) => p.filename)).size;
       const fallback = `Đã nạp ${nSheets} sheet từ ${nFiles} file. Bạn muốn hỏi gì về dữ liệu này?`;
-
-      // Summary text + AI-generated suggestions → overlay on sheet area (not in chat).
-      setSummaryText(res.insights?.summary || fallback);
-      setSuggestions((res.insights?.suggestions || []).slice(0, 6));
-
-      // Findings the system produced on its own — already executed and
-      // number-verified, so they are shown as results, not as suggestions.
-      setDiscoveries(res.discoveries ?? []);
-
+      const initialSuggestions = (res.insights?.suggestions || []).slice(0, 3);
       setMessages((m) => [
         ...m,
-        { role: "assistant", text: res.insights?.summary || fallback },
+        {
+          role: "assistant",
+          text: res.insights?.summary || fallback,
+          suggestions: initialSuggestions,
+        },
       ]);
     } catch (e) {
       setMessages((m) => [...m, { role: "assistant", text: `Lỗi upload: ${(e as Error).message}` }]);
@@ -1111,6 +1226,99 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
       setUploading(false);
     }
   }
+
+  const tourSteps: TourStep[] = useMemo(
+    () => [
+      {
+        title: "Chào mừng đến GraphSheet 👋",
+        badge: "Sandbox",
+        body: "Khám phá nhanh cách GraphSheet biến dữ liệu phức tạp thành bảng tính trực quan, biểu đồ và báo cáo chỉ với tiếng Việt tự nhiên.",
+        onEnter: () => setSidebarTab("sources"),
+      },
+      {
+        anchor: "upload",
+        title: "1. Tải dữ liệu lên",
+        badge: "Lớp ảo Demo",
+        body: "Trong luồng thật, bạn bấm \"Tải file\" để chọn file Excel/CSV. Để xem thử ngay trên giao diện mà không ảnh hưởng dữ liệu, bấm nút Demo bên dưới:",
+        onEnter: () => setSidebarTab("sources"),
+        actionButton: {
+          label: "✨ Nạp dữ liệu mẫu (Lớp ảo 0s) & tiếp tục",
+          loadingLabel: "Đang bật demo...",
+          onClick: () => {
+            isTourDemoActiveRef.current = true;
+            setTables([DEMO_PROFILE]);
+            setSelectedSources(["demo_sales_sheet"]);
+            setActiveKey("demo_sales_sheet");
+            setGridCache({ demo_sales_sheet: DEMO_GRID_DATA });
+            setMessages([
+              {
+                role: "assistant",
+                text: "📊 [Lớp ảo Demo] Đã nạp thành công bộ dữ liệu mẫu Bán hàng chuỗi cửa hàng (30 dòng). Bạn có thể xem bảng tính trực tiếp hoặc trải nghiệm các tính năng phân tích!",
+                suggestions: [
+                  "Tổng doanh thu theo từng khu vực?",
+                  "Top nhân viên có doanh số cao nhất?",
+                  "Cơ cấu doanh thu theo nhóm hàng?",
+                ],
+              },
+            ]);
+            setDashboardItems(DEMO_DASHBOARD_ITEMS);
+            setSidebarTab("sources");
+          },
+        },
+      },
+      {
+        anchor: "sheet-tabs",
+        title: "2. Xem dữ liệu thật trên Sheet",
+        badge: "Lớp ảo Demo",
+        body: "Dữ liệu được nạp hiển thị trực tiếp trên lưới bảng tính Univer Grid. Bạn có thể lọc, sắp xếp, duyệt cột và mở các bảng kết quả phân tích riêng biệt.",
+        onEnter: () => {
+          setSidebarTab("sources");
+          setActiveKey("demo_sales_sheet");
+        },
+      },
+      {
+        anchor: "chat-input",
+        title: "3. Hỏi đáp bằng tiếng Việt",
+        badge: "Lớp ảo Demo",
+        body: "Gõ câu hỏi như nói chuyện bình thường hoặc chọn 1 trong 3 câu hỏi gợi ý nhanh bên dưới (ví dụ: \"Top doanh thu theo khu vực\", \"Nhân viên bán chạy nhất\").",
+        onEnter: () => setSidebarTab("sources"),
+      },
+      {
+        anchor: "build-dashboard",
+        title: "4. Dashboard tự động",
+        badge: "Lớp ảo Demo",
+        body: "Một cú bấm: AI tự lên kế hoạch phân tích, tính toán các chỉ số KPI và dựng biểu đồ trực quan toàn diện.",
+        onEnter: () => setSidebarTab("sources"),
+      },
+      {
+        anchor: "dashboard-tab",
+        title: "5. Xuất báo cáo",
+        badge: "Lớp ảo Demo",
+        body: "Trong thẻ Dashboard, bạn có thể đổi bố cục, đổi bảng màu, tải file Excel hoàn chỉnh kèm công thức, hoặc nhờ AI viết báo cáo Word trình cấp trên.",
+        onEnter: () => {
+          setSidebarTab("sources");
+          setActiveKey("dashboard");
+          if (dashboardItems.length === 0) setDashboardItems(DEMO_DASHBOARD_ITEMS);
+        },
+      },
+      {
+        anchor: "memory-tab",
+        title: "6. Càng dùng càng hiểu bạn",
+        badge: "Graph Memory",
+        body: "Hồng thống ghi nhớ thói quen phân tích và tự học thêm kỹ năng mới sau mỗi phiên. Vào đây xem mạng lưới ký ức Neo4j.",
+        onEnter: () => setSidebarTab("memory"),
+      },
+      {
+        title: "Xong rồi! 🎉",
+        badge: "Hoàn tất",
+        body: "Hướng dẫn hoàn tất! Khi bạn bấm \"Bắt đầu dùng\", toàn bộ lớp ảo demo sẽ tự động dọn dẹp để bạn bắt đầu làm việc với dữ liệu thật.",
+        onEnter: () => {
+          setSidebarTab("sources");
+        },
+      },
+    ],
+    [dashboardItems.length]
+  );
 
   async function selectSheet(sourceId: string) {
     setActiveKey(sourceId);
@@ -1258,7 +1466,6 @@ function isExecutiveReportRequest(query: string): boolean {
     const q = (text ?? input).trim();
     if (!q || busy) return;
     setInput("");
-    setSuggestions([]);          // dismiss suggestions overlay
     setMessages((m) => [...m, { role: "user", text: q }]);
 
     if (isExecutiveReportRequest(q)) {
@@ -1532,7 +1739,7 @@ function isExecutiveReportRequest(query: string): boolean {
         <button
           className="topbar-help"
           title="Xem lại hướng dẫn sử dụng"
-          onClick={() => setShowTour(true)}
+          onClick={startTour}
         >
           ?
         </button>
@@ -1540,11 +1747,8 @@ function isExecutiveReportRequest(query: string): boolean {
       </header>
       {showTour && (
         <Tour
-          steps={TOUR_STEPS}
-          onFinish={() => {
-            setShowTour(false);
-            localStorage.setItem(TOUR_SEEN_KEY, "1");
-          }}
+          steps={tourSteps}
+          onFinish={finishTour}
         />
       )}
       {sidebarTab === "memory" ? (
@@ -2062,38 +2266,7 @@ function isExecutiveReportRequest(query: string): boolean {
                 </div>
               )}
 
-              {/* ── Suggestions overlay (shown after upload, dismissed on click) ── */}
-              {suggestions.length > 0 && (
-                <div className="suggest-overlay">
-                  <div className="suggest-card">
-                    <p className="suggest-card__summary">{summaryText}</p>
 
-                    {/* Findings, not chores: these were computed and verified
-                        before being shown, so they read as results the user
-                        already has rather than work they still have to do. */}
-                    {discoveries.length > 0 && (
-                      <div className="discoveries">
-                        <div className="discoveries__head">💡 Hệ thống đã tự tìm thấy</div>
-                        {discoveries.map((d, j) => (
-                          <div key={j} className="discovery">
-                            <div className="discovery__title">{d.title}</div>
-                            {d.detail && <div className="discovery__detail">{d.detail}</div>}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="suggest-card__chips">
-                      {suggestions.map((s, j) => (
-                        <button key={j} className="chip chip--suggest" disabled={busy} onClick={() => send(s)}>
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                    <button className="suggest-card__close" onClick={() => setSuggestions([])}>✕</button>
-                  </div>
-                </div>
-              )}
 
               {/* ── Chart/KPI display panel (shown after reply, closeable) ── */}
               {(displayChart || displayScalar != null) && (
@@ -2195,6 +2368,17 @@ function isExecutiveReportRequest(query: string): boolean {
             <div key={i} className={`bubble bubble--${m.role}`}>
               {m.text && <MarkdownText text={m.text} />}
 
+              {/* Upload-time concise suggestions in chat */}
+              {m.suggestions && m.suggestions.length > 0 && (
+                <div className="bubble__follow-up" style={{ marginTop: "0.6rem", display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                  {m.suggestions.slice(0, 3).map((q, j) => (
+                    <button key={j} className="chip chip--suggest" disabled={busy} onClick={() => send(q)}>
+                      💡 {q}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {m.reply && (
                 <>
                   {/* Collapsed by default: proves the work happened without
@@ -2222,7 +2406,7 @@ function isExecutiveReportRequest(query: string): boolean {
                     <div className="clarify">
                       <div className="clarify__q">🤔 {m.reply.answer}</div>
                       <div className="clarify__opts">
-                        {(m.reply.follow_up ?? []).map((o, j) => (
+                        {(m.reply.follow_up ?? []).slice(0, 3).map((o, j) => (
                           <button key={j} className="chip chip--clarify" disabled={busy} onClick={() => send(o)}>
                             {o}
                           </button>
@@ -2327,7 +2511,7 @@ function isExecutiveReportRequest(query: string): boolean {
                       duplicate every choice. */}
                   {!m.reply.clarify && m.reply.follow_up && m.reply.follow_up.length > 0 && (
                     <div className="bubble__follow-up" style={{ marginTop: "0.5rem", display: "flex", flexWrap: "wrap", gap: "6px" }}>
-                      {m.reply.follow_up.map((q, j) => (
+                      {m.reply.follow_up.slice(0, 3).map((q, j) => (
                         <button key={j} className="chip chip--suggest" disabled={busy} onClick={() => send(q)}>
                           💡 {q}
                         </button>

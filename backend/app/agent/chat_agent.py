@@ -372,7 +372,7 @@ _SUMMARY_SCHEMA = {
             "type": "array",
             "items": {"type": "string"},
             "minItems": 3,
-            "maxItems": 5,
+            "maxItems": 3,
         },
     },
 }
@@ -383,16 +383,16 @@ _SUMMARY_PROMPT = """The user just uploaded the following dataset:
 
 Your task: Understand the dataset's context, the structural grain (mức độ chi tiết), and anticipate the user's business objective. Output a SINGLE JSON:
 {{"summary": "<A welcoming Data Persona greeting in Vietnamese. Example: 'Chào bạn. Tôi nhận thấy đây là [Loại Dữ Liệu], với độ chi tiết đến từng [Grain]. Có vẻ mục tiêu của bạn là [Mục tiêu]. Tuy nhiên, tôi thấy dữ liệu này không có [Cột quan trọng bị thiếu, vd: Chi phí/Khách hàng], nên tôi không thể phân tích [Lợi nhuận/Tệp khách], mà sẽ tập trung vào [Hướng thay thế] nhé. Bạn muốn bắt đầu từ đâu?'>",
-  "suggestions": ["<3-5 specific analytical questions in Vietnamese that the user is likely to ask>"]}}
+  "suggestions": ["<exactly 3 short, concise analytical questions in Vietnamese (under 10 words each, using exact column names)>"]}}
 
 Rules for the Data Persona (summary):
 - Be proactive and honest. If obvious business metrics are missing (e.g., Sales data without Cost, HR data without Salary), STATE IT CLEARLY so the user knows the blindspots upfront.
 - Identify the likely business objective (e.g., Sales Performance, Inventory Management).
 
 Rules for suggestions:
+- Exactly 3 short, concise questions. Keep each question short and under 10 words.
 - Use EXACT sheet/column names present in the data, do not invent them.
 - Prioritize quantitative questions: sum, average, comparison, top N, trends over time.
-- Keep them concise and natural (e.g., "Tổng doanh thu theo từng vùng?").
 """
 
 
