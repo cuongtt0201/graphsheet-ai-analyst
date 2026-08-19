@@ -413,6 +413,9 @@ def format_semantics_for_prompt(semantics: dict[str, dict] | None) -> str:
         if measures:
             m_strs = [f"`{m.get('column')}` ({m.get('concept')}, {m.get('unit', '')} -> {m.get('aggregation_type', 'sum')})" for m in measures[:4]]
             lines.append(f"  • Chỉ số đo lường chính: {', '.join(m_strs)}")
+        elif s.get("primary_measure"):
+            unit = f" ({s['measure_unit']})" if s.get("measure_unit") else ""
+            lines.append(f"  • Chỉ số chính: `{s['primary_measure']}`{unit}")
 
         # Recommended indicators
         indicators = s.get("recommended_indicators") or []
@@ -432,6 +435,8 @@ def format_semantics_for_prompt(semantics: dict[str, dict] | None) -> str:
             lines.append(f"    - Cảnh báo: {c}")
 
     lines.append("\nQuy tắc phân tích: Bám sát đúng Hạt dữ liệu (Grain) và Hình thái (Archetype) ở trên. "
+                 "LƯU Ý: nếu grain là 'mỗi dòng = 1 mặt hàng trong giao dịch' thì ĐẾM SỐ DÒNG "
+                 "KHÔNG phải số đơn hàng — phải đếm số mã giao dịch phân biệt. "
                  "Nếu là bảng log/telemetry thì đo lường theo p95/p99/error rate; nếu là điểm số thì tính trung bình/phổ điểm; "
                  "nếu là giao dịch thì tính tổng/AOV.")
     return "\n".join(lines)

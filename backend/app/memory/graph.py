@@ -449,6 +449,13 @@ def delete_memory_by_id(user_id: str, memory_id: str) -> bool:
     return bool(rows and rows[0].get("deleted", 0) > 0)
 
 
+_ERASE_STOPWORDS = {
+    "quên", "xóa", "thói", "quen", "bộ", "nhớ", "ký", "ức", "đi", "đừng",
+    "hết", "tất", "cả", "luật", "công", "thức", "tôi", "cho", "về", "của",
+    "các", "những", "nào", "gì", "memory", "forget", "delete", "clear", "all", "the", "my"
+}
+
+
 def forget_memory_by_text(user_id: str, query_text: str) -> list[str]:
     """Natural Language Erasure: Search and delete memories matching keywords."""
     if not query_text or not user_id:
@@ -456,13 +463,17 @@ def forget_memory_by_text(user_id: str, query_text: str) -> list[str]:
     keywords = [w.lower() for w in re.findall(r"\w+", query_text) if len(w) >= 2]
     if not keywords:
         return []
-    
+
+    search_terms = [w for w in keywords if w not in _ERASE_STOPWORDS]
+    if not search_terms:
+        search_terms = keywords
+
     deleted_items = []
     # Search behaviors
     behaviors = get_behaviors(user_id)
     for b in behaviors:
         desc = b.get("description", "").lower()
-        if any(kw in desc for kw in keywords):
+        if any(term in desc for term in search_terms) or _token_similarity(query_text, desc) >= 0.35:
             delete_memory_by_id(user_id, b["id"])
             deleted_items.append(f"Thói quen: {b.get('description')}")
 
@@ -470,7 +481,7 @@ def forget_memory_by_text(user_id: str, query_text: str) -> list[str]:
     rules = get_business_rules(user_id)
     for r in rules:
         c_name = r.get("concept_name", "").lower()
-        if any(kw in c_name for kw in keywords):
+        if any(term in c_name for term in search_terms) or _token_similarity(query_text, c_name) >= 0.35:
             delete_memory_by_id(user_id, r["id"])
             deleted_items.append(f"Luật nghiệp vụ: {r.get('concept_name')}")
 

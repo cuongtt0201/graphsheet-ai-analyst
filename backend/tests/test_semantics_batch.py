@@ -41,7 +41,7 @@ def test_many_sheets_cost_one_call_per_batch_not_one_per_sheet():
         out = semantics.analyze_all(profiles)
 
     assert len(out) == 8
-    assert calls == [4, 4]          # 8 sheets -> 2 calls, not 8
+    assert calls == [3, 3, 2]          # 8 sheets -> 3 calls (batch size = 3)
 
 
 def test_deterministic_override_still_applies_to_batched_answers():
