@@ -92,10 +92,12 @@ async def upload(request: Request, files: list[UploadFile]):
                     #     (never degrade an already-correct parse) but flag
                     #     low_confidence so the review banner invites the user to
                     #     check, with the LLM's suggestion attached.
-                    # Degrades silently per-sheet on any failure.
+                    # LLM header confirmation ONLY for low-confidence sheets (weird layouts).
+                    # Clean/standard sheets skip this entirely for instant 0ms parsing.
                     checkable = [
                         p for p in file_profiles
-                        if (file_grids.get(p["source_id"]) or {}).get("grid")
+                        if (p.get("detection") or {}).get("low_confidence")
+                        and (file_grids.get(p["source_id"]) or {}).get("grid")
                     ]
                     if is_sample:
                         for p in checkable:
