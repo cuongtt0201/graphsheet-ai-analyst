@@ -504,6 +504,11 @@ def delete_all_user_memories(user_id: str) -> int:
     return rows[0]["deleted"] if rows else 0
 
 
+def delete_all_behaviors(user_id: str) -> int:
+    """User-facing 'forget what you learned about me' alias."""
+    return delete_all_user_memories(user_id)
+
+
 def get_all_user_memories(user_id: str) -> dict:
     """Retrieve full memory profile for UI management."""
     return {
