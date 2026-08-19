@@ -25,15 +25,8 @@ from app.data.trends import format_trend_for_prompt
 from app.memory import graph
 from app.state import get_state, get_user_id
 from app.util_json import ndjson_line
-from app.agent.swarm_monitor import event_stream
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
-
-
-@router.get("/swarm-stream")
-async def swarm_stream():
-    """SSE endpoint for Level-8 Admin Dashboard to monitor Swarm Agents in real-time."""
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.post("/run_code")
@@ -348,4 +341,39 @@ def download_report(request: Request, report_id: str):
     )
 
 
+# ── Memory Management Endpoints ───────────────────────────────────────────
 
+@router.get("/memory/all")
+def get_user_memory(request: Request):
+    """Retrieve full personal knowledge & memory profile for this user."""
+    user_id = get_user_id(request)
+    memories = graph.get_all_user_memories(user_id)
+    return {"ok": True, "memories": memories}
+
+
+@router.post("/memory/delete")
+def delete_single_memory(request: Request, body: dict):
+    """Delete a specific memory node by ID."""
+    user_id = get_user_id(request)
+    memory_id = body.get("memory_id")
+    if not memory_id:
+        raise HTTPException(400, "Thiếu memory_id.")
+    success = graph.delete_memory_by_id(user_id, memory_id)
+    return {"ok": success}
+
+
+@router.post("/memory/forget")
+def forget_memory_text(request: Request, body: dict):
+    """Natural language memory erasure matching keywords."""
+    user_id = get_user_id(request)
+    query = body.get("query", "")
+    deleted = graph.forget_memory_by_text(user_id, query)
+    return {"ok": True, "deleted_items": deleted}
+
+
+@router.post("/memory/clear")
+def clear_all_memory(request: Request):
+    """Wipe all personal memories for this user."""
+    user_id = get_user_id(request)
+    deleted_count = graph.delete_all_user_memories(user_id)
+    return {"ok": True, "deleted_count": deleted_count}

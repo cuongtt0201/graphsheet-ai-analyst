@@ -3,15 +3,10 @@ import "./App.css";
 import ChatWorkspace from "./chat/ChatWorkspace";
 import LandingPage from "./chat/LandingPage";
 import { api } from "./api";
-import SwarmMonitor from "./admin/SwarmMonitor";
 
 function App() {
   const [email, setEmail] = useState<string | null>(null);
   const [checking, setChecking] = useState(true);
-
-  if (window.location.pathname === "/admin/swarm") {
-    return <SwarmMonitor />;
-  }
 
   useEffect(() => {
     api

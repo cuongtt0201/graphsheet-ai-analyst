@@ -22,7 +22,6 @@ import re
 import threading
 import time
 
-from app.agent.swarm_monitor import broadcast_swarm_event
 from app.ai import energy, harness
 from app.config import MODEL_EVAL_DIR
 
@@ -473,20 +472,6 @@ def call_ai(prompt: str, schema: dict, tier: str = "fast", session_id: str | Non
             line = text.strip().split("\n")[0][:100]
             if line:
                 _emit(f"💭 {line}", kind="thought")
-            # Stream directly to the admin monitor
-            broadcast_swarm_event(
-                agent="PoolRouter", 
-                event_type="thought", 
-                message=text.strip(), 
-                metadata={"slot": slot["id"]}
-            )
-
-        broadcast_swarm_event(
-            agent="PoolRouter", 
-            event_type="api_call", 
-            message=f"Calling {model}", 
-            metadata={"slot": slot["id"], "prompt_length": len(prompt)}
-        )
         # One attempt, one door. The gate normalizes the request for this
         # provider, validates what comes back, and hands failures over already
         # classified — routing below reacts to the KIND, never to error prose.

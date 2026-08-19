@@ -5,7 +5,7 @@ from app.data.profiling import profile_file, read_raw_grids, read_single_sheet_r
 from app.data.profiler import clean_and_profile
 from app.data.smart_read import read_grid_with_header
 from app.data.llm_header import llm_detect_header, llm_detect_headers
-from app.data.semantics import analyze_all, apply_grain_dedup
+from app.data.semantics import analyze_all, apply_grain_dedup, _ARCHETYPE_ICONS
 from app.memory import graph
 from app.sheets.xlsx_export import build_dashboard_xlsx
 from app.state import get_state, get_user_id
@@ -299,28 +299,55 @@ async def upload(request: Request, files: list[UploadFile]):
 
                 if is_sample:
                     insights = {
-                        "summary": f"Đã nạp thành công bộ dữ liệu mẫu bán hàng ({n_sheets} sheet, {n_rows:,} dòng). Bạn có thể thử đặt câu hỏi phân tích hoặc bấm Dashboard tự động.",
+                        "summary": f"Đã nạp thành công bộ dữ liệu mẫu ({n_sheets} sheet, {n_rows:,} dòng). Bạn có thể đặt câu hỏi phân tích hoặc bấm nút 'Tạo Dashboard'.",
                         "suggestions": [
-                            "Tổng doanh thu theo từng khu vực?",
-                            "Top nhân viên có doanh số cao nhất?",
-                            "Cơ cấu doanh thu theo nhóm hàng?",
+                            "Tổng quan các chỉ số đo lường chính?",
+                            "Xu hướng biến động theo thời gian?",
+                            "Top các nhóm/thực thể hàng đầu?",
                         ],
                     }
                     discoveries = []
                     enter(3)
                 else:
-                    # AI comprehension pass: summary + suggested questions. Runs while the
-                    # frontend plays its "rendering your data" skeleton, so the wait IS the
-                    # show. Never fails the upload (returns None on LLM trouble).
-                    step("🧠 Đang phân tích ý nghĩa dữ liệu bằng AI...")
-                    insights = summarize_upload(profiles, dataframes)
+                    step("🧠 Đang tổng hợp Hồ sơ Tri thức Dữ liệu (Semantic Dossier)...")
+                    # Build rich persona insights directly from the Universal Semantic Dossier
+                    main_sem = semantics.get(initial_sid) or (next(iter(semantics.values()), None) if semantics else {})
+                    if main_sem:
+                        archetype_name = _ARCHETYPE_ICONS.get(main_sem.get("archetype"), "📊 Bảng dữ liệu")
+                        purpose = main_sem.get("primary_purpose") or "Phân tích và trực quan hóa dữ liệu"
+                        grain = main_sem.get("grain_description") or main_sem.get("grain_type", "dữ liệu chi tiết")
+                        blindspots = main_sem.get("blindspots") or []
+                        suggestions = main_sem.get("suggestions") or []
 
-                    # Phase 4: everything needed is known; assembling what the user sees.
+                        summary_lines = [
+                            f"👋 **Tôi đã đọc và hiểu toàn bộ dữ liệu** ({n_sheets} sheet · {n_rows:,} dòng).",
+                            f"📁 **Hình thái dữ liệu**: {archetype_name}",
+                            f"🎯 **Mục đích**: {purpose}.",
+                            f"🔍 **Hạt dữ liệu (Grain)**: {grain}."
+                        ]
+                        if blindspots:
+                            summary_lines.append(f"⚠️ **Điểm mù dữ liệu**: {blindspots[0]}")
+                        summary_lines.append("\n👉 Bạn có thể đặt câu hỏi bất kỳ ở khung chat bên dưới, hoặc bấm nút **Tạo Dashboard** khi cần nhé!")
+
+                        insights = {
+                            "summary": "\n".join(summary_lines),
+                            "suggestions": suggestions[:4] if suggestions else [
+                                "Thống kê tổng quan các chỉ số đo lường?",
+                                "Xu hướng biến động theo thời gian?",
+                                "Xếp hạng các thực thể/phân nhóm hàng đầu?",
+                            ],
+                            "dossier": main_sem,
+                        }
+                    else:
+                        insights = summarize_upload(profiles, dataframes) or {
+                            "summary": f"Đã nạp thành công {n_sheets} sheet ({n_rows:,} dòng).",
+                            "suggestions": ["Thống kê tổng quan dữ liệu?", "Phân tích theo nhóm?"]
+                        }
+
+                    # Phase 4: assembly complete
                     enter(3)
 
-                    # Proactive stage: turn the measured signals into questions,
-                    # RUN them, and keep only what verified. The user sees real
-                    # findings before asking anything.
+                    # Proactive stage: goal explorer
                     from app.agent.goal_explorer import explore
 
                     try:
@@ -330,43 +357,24 @@ async def upload(request: Request, files: list[UploadFile]):
                         discoveries = []
                     state["discoveries"] = discoveries
 
-                    # --- AUTONOMOUS DATA ANALYST BRIDGE ---
-                    # Nếu Đặc vụ Tiên phong đánh hơi thấy vấn đề, chủ động gọi Đặc vụ Dựng hình
-                    if discoveries:
-                        step("🚨 AI phát hiện điểm đáng chú ý! Đang tự động dựng Dashboard phân tích sâu...")
-                        try:
-                            from app.agent.sub_agents import run_data_agent
-                            from app.agent.code_interpreter import run_code_agent
-                            chief_finding = discoveries[0]
-                            synthetic_prompt = f"Phân tích sâu về hiện tượng sau: {chief_finding['title']}. {chief_finding['detail']}. Hãy dựng một Dashboard đầy đủ chi tiết."
-                            
-                            if not state.get("cleaned_df"):
-                                for event in run_data_agent(state, synthetic_prompt):
-                                    if isinstance(event, dict) and event.get("type") == "step":
-                                        q.put(event)
-
-                            dashboard_layout = None
-                            if state.get("cleaned_df") is not None:
-                                for event in run_code_agent(state, synthetic_prompt, user_id):
-                                    if isinstance(event, dict):
-                                        if event.get("type") == "finished":
-                                            dashboard_layout = event.get("layout")
-                                        elif event.get("type") in ("step", "error"):
-                                            q.put(event)
-                                        
-                            if dashboard_layout:
-                                state["dashboard_items"] = dashboard_layout.get("kpis", []) + dashboard_layout.get("charts", [])
-                                step("✅ Đã tự động tạo Dashboard thành công! Hãy sang tab Dashboard để xem.")
-                        except Exception as exc:
-                            print(f"[upload] autonomous dashboard skipped: {exc}")
-                            step("⚠️ Lỗi khi tự dựng Dashboard. Xin lỗi sếp.")
-
                 # The "active" sheet's fingerprint is what the chat mostly
                 # operates on, so memory recall keys off it specifically
                 # (falls back to the first sheet's fingerprint if unset).
                 active_fp = state["file_fingerprints"].get(initial_sid) or next(
                     iter(state["file_fingerprints"].values()), None
                 )
+                
+                # Proactive Recipe Recall: Check if user built a dashboard on this exact structure before
+                if not is_sample and active_fp:
+                    matching_recipe = graph.find_matching_recipe(user_id, active_fp)
+                    if matching_recipe and isinstance(insights, dict):
+                        recipe_title = matching_recipe.get("title", "Dashboard trước đây")
+                        insights["summary"] += f"\n\n💡 **Gợi ý Ký ức**: Tôi nhận thấy bạn từng dựng mẫu Dashboard *'{recipe_title}'* cho file có cùng cấu trúc này. Bạn có thể bấm **Tạo Dashboard** để tái sử dụng ngay!"
+                        insights["matched_recipe"] = {
+                            "id": matching_recipe.get("id"),
+                            "title": recipe_title,
+                        }
+
                 graph.log_action(
                     user_id, "upload",
                     {"n_sheets": n_sheets, "n_rows": n_rows, "filenames": filenames},

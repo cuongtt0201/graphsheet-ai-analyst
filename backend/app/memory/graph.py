@@ -1,28 +1,21 @@
-"""Graph memory: one Neo4j graph centered on :User, holding identity
-(email/name as PROPERTIES, never as separate nodes), habits (:Action),
-uploaded :File shapes (fingerprinted so two users' structurally-identical
-sheets recall each other), :Recipe (dashboards built), and self-learned
+"""Graph memory: one Neo4j graph centered on :User, holding identity,
+habits (:Behavior with Bubble Merge), personal business rules (:BusinessRule),
+uploaded :File shapes (fingerprinted), :Recipe (dashboards built), and self-learned
 :Skill nodes — all connected so recall is a traversal instead of a join.
 
-Design rules (agreed in planning):
-  - Identity/scalars (email, name, timestamps) are node PROPERTIES, not nodes.
-    Only things worth traversing or sharing across users become nodes.
-  - :File and :Column are shared/de-duplicated across users (by fingerprint /
-    name+role) so the graph can learn cross-user ("people with a file like
-    yours usually build X") — the per-user edge is what's private, not the
-    node.
-  - :Action nodes are only written for meaningful events (a handful of call
-    sites), not every micro-interaction, to avoid turning :User into a
-    supernode. Rolling these up into a habit-profile is a later phase.
-
-Every public function degrades to a silent no-op (returns None/[] and logs a
-warning) if Neo4j is unreachable or NEO4J_PASSWORD is unset — graph memory
-must never be able to break upload/chat/dashboard, the same contract as the
-sandbox's Docker-tier fallback.
+Key Innovations:
+  - BUBBLE MERGE: Similar memory nodes merge into a single larger, higher-weight node
+    (weight increases: 1 -> 2 -> 3) instead of proliferating duplicate nodes.
+  - HARD QUOTAS & LRU EVICTION: Strict caps per user (15 Behaviors, 10 Rules, 10 Recipes)
+    preventing supernode explosion. Stale, low-weight nodes are evicted automatically.
+  - EXPLICIT & NATURAL ERASURE: Fast deletion by ID, keyword query, or full reset.
+  - PROACTIVE RECIPE RECALL: Auto-detects previously built dashboards on matching file shapes.
 """
 
 import hashlib
+import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -44,10 +37,14 @@ _driver = None
 _driver_lock = threading.Lock()
 _bootstrapped = False
 
+# Hard Quotas per User to prevent supernode bloat
+MAX_BEHAVIORS_PER_USER = 15
+MAX_RULES_PER_USER = 10
+MAX_RECIPES_PER_USER = 10
+
 
 def _get_driver():
-    """Lazy singleton driver — the neo4j Python driver is itself a connection
-    pool, so one instance should live for the process lifetime."""
+    """Lazy singleton driver."""
     global _driver
     if not ENABLED:
         return None
@@ -59,9 +56,7 @@ def _get_driver():
 
 
 def _run(query: str, **params):
-    """Execute one write/read query in its own session. Returns a list of
-    record dicts, or None if the graph is disabled/unreachable (callers must
-    treat None the same as "no memory available", never raise)."""
+    """Execute one write/read query in its own session."""
     driver = _get_driver()
     if driver is None:
         return None
@@ -75,22 +70,19 @@ def _run(query: str, **params):
 
 
 def bootstrap_constraints() -> None:
-    """Idempotent — call once at app startup. Best-effort: logs and returns on
-    failure instead of blocking app startup on a down Neo4j."""
+    """Idempotent constraints bootstrap."""
     global _bootstrapped
     if not ENABLED or _bootstrapped:
         return
     statements = [
         "CREATE CONSTRAINT user_id IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE",
         "CREATE CONSTRAINT file_fingerprint IF NOT EXISTS FOR (f:File) REQUIRE f.fingerprint IS UNIQUE",
-        # Replaces an earlier global "skill name is unique across ALL users"
-        # constraint - now that skills are personal, two different users must
-        # be able to independently learn a skill with the same name.
         "DROP CONSTRAINT skill_name IF EXISTS",
         "CREATE CONSTRAINT skill_owner_name IF NOT EXISTS FOR (s:Skill) REQUIRE (s.owner_id, s.name) IS UNIQUE",
         "CREATE CONSTRAINT recipe_id IF NOT EXISTS FOR (r:Recipe) REQUIRE r.id IS UNIQUE",
         "CREATE CONSTRAINT action_id IF NOT EXISTS FOR (a:Action) REQUIRE a.id IS UNIQUE",
         "CREATE CONSTRAINT behavior_id IF NOT EXISTS FOR (b:Behavior) REQUIRE b.id IS UNIQUE",
+        "CREATE CONSTRAINT business_rule_id IF NOT EXISTS FOR (r:BusinessRule) REQUIRE r.id IS UNIQUE",
         "CREATE INDEX column_name IF NOT EXISTS FOR (c:Column) ON (c.name)",
         "CREATE INDEX action_ts IF NOT EXISTS FOR (a:Action) ON (a.ts)",
     ]
@@ -102,7 +94,7 @@ def bootstrap_constraints() -> None:
             for stmt in statements:
                 session.run(stmt)
         _bootstrapped = True
-        logger.info("[graph] constraints bootstrapped")
+        logger.info("[graph] constraints bootstrapped successfully")
     except (ServiceUnavailable, Neo4jError, OSError) as exc:
         logger.warning(f"[graph] bootstrap failed, memory features disabled for now: {exc}")
 
@@ -110,9 +102,6 @@ def bootstrap_constraints() -> None:
 # ── Identity ─────────────────────────────────────────────────────────────
 
 def merge_user(user_id: str, email: str | None = None, name: str | None = None) -> None:
-    """user_id is the stable key: the Google OAuth email when logged in, or an
-    anonymous session-derived id otherwise (see state.get_user_id) — chat mode
-    works without login, so identity/habit tracking must too."""
     _run(
         """
         MERGE (u:User {id: $user_id})
@@ -126,10 +115,6 @@ def merge_user(user_id: str, email: str | None = None, name: str | None = None) 
 # ── Files (shared, fingerprinted shape) ────────────────────────────────────
 
 def fingerprint_profile(profile: dict) -> str:
-    """A stable hash of a sheet's column SHAPE (name + inferred role),
-    order-independent. Two structurally-identical sheets — even from
-    different users/filenames — hash the same, so :File nodes are shared and
-    "seen a file like this before" recall works across users."""
     cols = profile.get("column_profiles") or []
     sig = sorted(f"{c.get('name', '')}|{c.get('role', '?')}" for c in cols)
     if not sig:
@@ -138,8 +123,6 @@ def fingerprint_profile(profile: dict) -> str:
 
 
 def upsert_file(user_id: str, profile: dict) -> str:
-    """MERGE the (shared) File node for this sheet's shape, link the columns,
-    and record that this user uploaded it. Returns the fingerprint."""
     fp = fingerprint_profile(profile)
     cols = profile.get("column_profiles") or []
     _run(
@@ -166,15 +149,10 @@ def upsert_file(user_id: str, profile: dict) -> str:
     return fp
 
 
-# ── Habits (Action log — coarse-grained on purpose) ────────────────────────
+# ── Habits (Action log — short-lived buffer) ──────────────────────────────
 
 def log_action(user_id: str, action_type: str, payload: dict | None = None,
                 file_fingerprint: str | None = None) -> None:
-    """Record one meaningful event (asked a question, built a dashboard,
-    exported, clicked a suggestion). Call sparingly — this is what accumulates
-    on :User, and an unbounded per-keystroke log would turn it into a
-    supernode; a later phase should roll old Actions into an aggregate
-    habit-profile instead of keeping them all forever."""
     _run(
         """
         MATCH (u:User {id: $user_id})
@@ -191,8 +169,6 @@ def log_action(user_id: str, action_type: str, payload: dict | None = None,
 
 
 def _flatten_payload(payload: dict | None) -> str:
-    """Neo4j properties can't hold nested maps — stash payload as compact JSON."""
-    import json
     if not payload:
         return "{}"
     try:
@@ -218,30 +194,58 @@ def recent_actions(user_id: str, action_type: str | None = None, limit: int = 20
 # ── Recipes (dashboards built, replayable on a similar file later) ────────
 
 def save_recipe(user_id: str, file_fingerprint: str, title: str, layout_summary: dict) -> str | None:
-    """layout_summary should be small (KPI/chart TYPES + aggregations, not the
-    computed data) — this is a reusable blueprint, not a data snapshot."""
-    import json
     recipe_id = str(uuid.uuid4())
+    now = time.time()
     rows = _run(
         """
         MATCH (u:User {id: $user_id})
         MATCH (f:File {fingerprint: $fp})
-        CREATE (r:Recipe {id: $id, title: $title, layout: $layout, created_at: $now})
+        CREATE (r:Recipe {id: $id, title: $title, layout: $layout, created_at: $now, updated_at: $now, usage_count: 1})
         MERGE (u)-[:BUILT]->(r)
         MERGE (r)-[:FOR]->(f)
         RETURN r.id AS id
         """,
         user_id=user_id, fp=file_fingerprint, id=recipe_id, title=title,
         layout=json.dumps(layout_summary, ensure_ascii=False, default=str)[:4000],
-        now=time.time(),
+        now=now,
+    )
+    # Evict oldest recipes if exceeding quota
+    _run(
+        """
+        MATCH (u:User {id: $user_id})-[:BUILT]->(r:Recipe)
+        WITH r ORDER BY r.updated_at DESC
+        SKIP $keep
+        DETACH DELETE r
+        """,
+        user_id=user_id, keep=MAX_RECIPES_PER_USER,
     )
     return recipe_id if rows is not None else None
 
 
-# ── Skills (personal: each user grows their OWN skill library, mirrors the
-# per-user .py files in skills_manager's personal/<owner> dir). Curated skills
-# (skills_manager's curated/ dir) are never mirrored here — they're shared,
-# hand-tested, and never subject to usage-based retirement. ──────────────────
+def find_matching_recipe(user_id: str, file_fingerprint: str) -> dict | None:
+    """Proactive Recipe Recall: Detects if the user previously built a dashboard
+    for a file with the EXACT same column shape."""
+    if not ENABLED or not user_id or not file_fingerprint:
+        return None
+    rows = _run(
+        """
+        MATCH (u:User {id: $user_id})-[:BUILT]->(r:Recipe)-[:FOR]->(f:File {fingerprint: $fp})
+        RETURN r.id AS id, r.title AS title, r.layout AS layout, r.created_at AS created_at, f.sample_name AS sample_name
+        ORDER BY r.updated_at DESC LIMIT 1
+        """,
+        user_id=user_id, fp=file_fingerprint,
+    )
+    if rows and rows[0]:
+        rec = rows[0]
+        try:
+            rec["layout_obj"] = json.loads(rec.get("layout") or "{}")
+        except Exception:
+            rec["layout_obj"] = {}
+        return rec
+    return None
+
+
+# ── Skills (Muscle Memory) ─────────────────────────────────────────────────
 
 def record_skill(owner_id: str, name: str, description: str, code: str = "") -> None:
     _run(
@@ -249,14 +253,13 @@ def record_skill(owner_id: str, name: str, description: str, code: str = "") -> 
         MERGE (u:User {id: $owner_id})
         MERGE (u)-[:HAS_SKILL]->(s:Skill {name: $name, owner_id: $owner_id})
         ON CREATE SET s.created_at = $now, s.usage_count = 0, s.success_count = 0
-        SET s.description = $description, s.code = $code
+        SET s.description = $description, s.code = $code, s.updated_at = $now
         """,
         owner_id=owner_id, name=name, description=description[:500], code=code, now=time.time(),
     )
 
 
 def get_personal_skills(owner_id: str) -> list[dict]:
-    """Retrieve all personal skills stored in Neo4j for this user, including the python code."""
     if not ENABLED or not owner_id:
         return []
     try:
@@ -277,49 +280,238 @@ def record_skill_usage(owner_id: str, name: str, success: bool) -> None:
         """
         MATCH (s:Skill {name: $name, owner_id: $owner_id})
         SET s.usage_count = coalesce(s.usage_count, 0) + 1,
-            s.success_count = coalesce(s.success_count, 0) + CASE WHEN $success THEN 1 ELSE 0 END
+            s.success_count = coalesce(s.success_count, 0) + CASE WHEN $success THEN 1 ELSE 0 END,
+            s.updated_at = $now
         """,
-        name=name, owner_id=owner_id, success=success,
+        name=name, owner_id=owner_id, success=success, now=time.time(),
     )
 
 
-def get_retired_skills(owner_id: str) -> set[str]:
-    """This user's own skills with low success (usage >= 3, success_rate < 30%)
-    - retired from THEIR sandbox only, never affects other users' skills."""
-    if not ENABLED or not owner_id:
-        return set()
-    try:
-        rows = _run(
+# ── Bubble Merge & Behaviors (Consolidated Habits & Preferences) ───────────
+
+def _token_similarity(text1: str, text2: str) -> float:
+    """Calculate token Jaccard similarity to detect overlapping concepts."""
+    tokens1 = set(re.findall(r"\w+", text1.lower()))
+    tokens2 = set(re.findall(r"\w+", text2.lower()))
+    if not tokens1 or not tokens2:
+        return 0.0
+    return len(tokens1 & tokens2) / len(tokens1 | tokens2)
+
+
+def get_behaviors(user_id: str) -> list[dict]:
+    rows = _run(
+        """
+        MATCH (u:User {id: $user_id})-[:HAS_BEHAVIOR]->(b:Behavior)
+        RETURN b.id AS id, b.description AS description, b.category AS category,
+               coalesce(b.weight, 1) AS weight, b.usage_count AS usage_count,
+               b.success_count AS success_count, b.updated_at AS updated_at
+        ORDER BY b.weight DESC, b.updated_at DESC
+        """,
+        user_id=user_id,
+    )
+    return rows or []
+
+
+def save_or_merge_behavior(user_id: str, description: str, category: str = "habit") -> dict:
+    """Bubble Merge: Merges with an existing similar behavior (increasing its weight)
+    or creates a new node, enforcing the MAX_BEHAVIORS_PER_USER quota."""
+    now = time.time()
+    existing = get_behaviors(user_id)
+    
+    # Check if there is a similar bubble to merge with (similarity >= 0.50)
+    for b in existing:
+        sim = _token_similarity(description, b.get("description", ""))
+        if sim >= 0.50 or (b.get("category") == category and sim >= 0.35):
+            new_weight = int(b.get("weight", 1)) + 1
+            merged_desc = description if len(description) >= len(b.get("description", "")) else b.get("description")
+            _run(
+                """
+                MATCH (b:Behavior {id: $id})
+                SET b.description = $desc, b.weight = $weight, b.updated_at = $now
+                """,
+                id=b["id"], desc=merged_desc, weight=new_weight, now=now,
+            )
+            return {"action": "merged", "id": b["id"], "weight": new_weight, "description": merged_desc}
+
+    # No similar bubble -> Create new node
+    new_id = str(uuid.uuid4())
+    _run(
+        """
+        MATCH (u:User {id: $user_id})
+        CREATE (b:Behavior {id: $id, description: $desc, category: $category,
+                            weight: 1, usage_count: 0, success_count: 0,
+                            created_at: $now, updated_at: $now})
+        MERGE (u)-[:HAS_BEHAVIOR]->(b)
+        """,
+        user_id=user_id, id=new_id, desc=description[:300], category=category[:40], now=now,
+    )
+
+    # Evict lowest-weight & oldest if quota exceeded
+    _run(
+        """
+        MATCH (u:User {id: $user_id})-[:HAS_BEHAVIOR]->(b:Behavior)
+        WITH b ORDER BY b.weight ASC, b.updated_at ASC
+        WITH collect(b) AS all_b
+        WHERE size(all_b) > $quota
+        UNWIND all_b[0..(size(all_b) - $quota)] AS to_delete
+        DETACH DELETE to_delete
+        """,
+        user_id=user_id, quota=MAX_BEHAVIORS_PER_USER,
+    )
+    return {"action": "created", "id": new_id, "weight": 1, "description": description}
+
+
+def save_behaviors(user_id: str, behaviors: list[dict]) -> None:
+    """Batch entry for distiller: uses bubble merge on each behavior."""
+    for b in behaviors:
+        desc = b.get("description")
+        cat = b.get("category") or "habit"
+        if desc:
+            save_or_merge_behavior(user_id, desc, cat)
+
+
+# ── Business Rules (Custom Formulas & Definitions per User) ────────────────
+
+def get_business_rules(user_id: str) -> list[dict]:
+    rows = _run(
+        """
+        MATCH (u:User {id: $user_id})-[:DEFINES]->(r:BusinessRule)
+        RETURN r.id AS id, r.concept_name AS concept_name, r.formula_desc AS formula_desc,
+               r.target_columns AS target_columns, coalesce(r.weight, 1) AS weight,
+               r.updated_at AS updated_at
+        ORDER BY r.weight DESC, r.updated_at DESC
+        """,
+        user_id=user_id,
+    )
+    return rows or []
+
+
+def save_or_merge_business_rule(user_id: str, concept_name: str, formula_desc: str, target_columns: list[str] | None = None) -> dict:
+    """Bubble Merge for Business Rules."""
+    now = time.time()
+    cols = json.dumps(target_columns or [], ensure_ascii=False)
+    existing = get_business_rules(user_id)
+
+    # Check for matching concept
+    for r in existing:
+        if r.get("concept_name", "").lower() == concept_name.lower() or _token_similarity(concept_name, r.get("concept_name", "")) >= 0.7:
+            new_weight = int(r.get("weight", 1)) + 1
+            _run(
+                """
+                MATCH (r:BusinessRule {id: $id})
+                SET r.formula_desc = $formula, r.target_columns = $cols,
+                    r.weight = $weight, r.updated_at = $now
+                """,
+                id=r["id"], formula=formula_desc, cols=cols, weight=new_weight, now=now,
+            )
+            return {"action": "merged", "id": r["id"], "weight": new_weight}
+
+    new_id = str(uuid.uuid4())
+    _run(
+        """
+        MATCH (u:User {id: $user_id})
+        CREATE (r:BusinessRule {id: $id, concept_name: $name, formula_desc: $formula,
+                                target_columns: $cols, weight: 1, created_at: $now, updated_at: $now})
+        MERGE (u)-[:DEFINES]->(r)
+        """,
+        user_id=user_id, id=new_id, name=concept_name, formula=formula_desc, cols=cols, now=now,
+    )
+
+    # Evict if exceeding quota
+    _run(
+        """
+        MATCH (u:User {id: $user_id})-[:DEFINES]->(r:BusinessRule)
+        WITH r ORDER BY r.weight ASC, r.updated_at ASC
+        WITH collect(r) AS all_r
+        WHERE size(all_r) > $quota
+        UNWIND all_r[0..(size(all_r) - $quota)] AS to_delete
+        DETACH DELETE to_delete
+        """,
+        user_id=user_id, quota=MAX_RULES_PER_USER,
+    )
+    return {"action": "created", "id": new_id, "weight": 1}
+
+
+# ── Explicit & Natural Memory Erasure ───────────────────────────────────────
+
+def delete_memory_by_id(user_id: str, memory_id: str) -> bool:
+    """Delete a specific memory node by ID."""
+    rows = _run(
+        """
+        MATCH (u:User {id: $user_id})
+        MATCH (n {id: $id})
+        WHERE (u)-[:HAS_BEHAVIOR]->(n) OR (u)-[:DEFINES]->(n) OR (u)-[:BUILT]->(n)
+        DETACH DELETE n
+        RETURN count(n) AS deleted
+        """,
+        user_id=user_id, id=memory_id,
+    )
+    return bool(rows and rows[0].get("deleted", 0) > 0)
+
+
+def forget_memory_by_text(user_id: str, query_text: str) -> list[str]:
+    """Natural Language Erasure: Search and delete memories matching keywords."""
+    if not query_text or not user_id:
+        return []
+    keywords = [w.lower() for w in re.findall(r"\w+", query_text) if len(w) >= 2]
+    if not keywords:
+        return []
+    
+    deleted_items = []
+    # Search behaviors
+    behaviors = get_behaviors(user_id)
+    for b in behaviors:
+        desc = b.get("description", "").lower()
+        if any(kw in desc for kw in keywords):
+            delete_memory_by_id(user_id, b["id"])
+            deleted_items.append(f"Thói quen: {b.get('description')}")
+
+    # Search rules
+    rules = get_business_rules(user_id)
+    for r in rules:
+        c_name = r.get("concept_name", "").lower()
+        if any(kw in c_name for kw in keywords):
+            delete_memory_by_id(user_id, r["id"])
+            deleted_items.append(f"Luật nghiệp vụ: {r.get('concept_name')}")
+
+    return deleted_items
+
+
+def delete_all_user_memories(user_id: str) -> int:
+    """Wipe the entire personal knowledge profile for this user."""
+    rows = _run(
+        """
+        MATCH (u:User {id: $user_id})
+        OPTIONAL MATCH (u)-[:HAS_BEHAVIOR]->(b:Behavior)
+        OPTIONAL MATCH (u)-[:DEFINES]->(r:BusinessRule)
+        OPTIONAL MATCH (u)-[:BUILT]->(rc:Recipe)
+        DETACH DELETE b, r, rc
+        RETURN count(b) + count(r) + count(rc) AS deleted
+        """,
+        user_id=user_id,
+    )
+    return rows[0]["deleted"] if rows else 0
+
+
+def get_all_user_memories(user_id: str) -> dict:
+    """Retrieve full memory profile for UI management."""
+    return {
+        "behaviors": get_behaviors(user_id),
+        "business_rules": get_business_rules(user_id),
+        "recipes": _run(
             """
-            MATCH (s:Skill {owner_id: $owner_id})
-            WHERE s.usage_count >= 3 AND (toFloat(s.success_count) / s.usage_count) < 0.3
-            RETURN s.name AS name
+            MATCH (u:User {id: $user_id})-[:BUILT]->(r:Recipe)
+            RETURN r.id AS id, r.title AS title, r.updated_at AS updated_at
+            ORDER BY r.updated_at DESC
             """,
-            owner_id=owner_id,
-        )
-        return {row["name"] for row in rows}
-    except Exception:
-        return set()
+            user_id=user_id,
+        ) or [],
+    }
 
 
-# ── Behaviors (per-user habits distilled from Action logs while idle) ──────
-#
-# Lifecycle: the idle job (memory/idle_job.py) waits for a user to go quiet,
-# hands their raw Action log to an LLM that distills durable habits/preferences
-# ("thường xem doanh thu theo tháng", "hay lọc theo Miền Bắc", "đang phân tích
-# dở file X"), stores each as a :Behavior, then DELETES the processed Actions —
-# so Actions are a short-lived buffer, not an ever-growing log. Behaviors are
-# injected into chat prompts; ones the model marks as used-but-wrong repeatedly
-# (usage >= 3, success < 30%) are hard-deleted.
-
-MAX_BEHAVIORS_PER_USER = 20
-
+# ── Distiller Helpers ──────────────────────────────────────────────────────
 
 def get_idle_users(idle_seconds: float, min_actions: int = 3) -> list[dict]:
-    """Users whose last activity is older than idle_seconds and who have
-    unprocessed Actions worth distilling. Uses an atomic lock in Cypher so
-    multiple Gunicorn/Uvicorn workers won't step on each other."""
-    # lock_cutoff ensures a dead worker doesn't permanently lock a user (5 min timeout)
     rows = _run(
         """
         MATCH (u:User)-[:PERFORMED]->(a:Action)
@@ -338,8 +530,6 @@ def get_idle_users(idle_seconds: float, min_actions: int = 3) -> list[dict]:
 
 
 def get_actions_for_distill(user_id: str, limit: int = 100) -> list[dict]:
-    """The user's raw Action buffer, oldest first (chronological reads better
-    in the distill prompt), with ids so the caller can delete exactly these."""
     rows = _run(
         """
         MATCH (u:User {id: $user_id})-[:PERFORMED]->(a:Action)
@@ -353,7 +543,6 @@ def get_actions_for_distill(user_id: str, limit: int = 100) -> list[dict]:
 
 
 def delete_actions(action_ids: list[str]) -> None:
-    """Remove processed Actions (post-distillation) so the buffer stays small."""
     if not action_ids:
         return
     _run(
@@ -365,56 +554,7 @@ def delete_actions(action_ids: list[str]) -> None:
     )
 
 
-def get_behaviors(user_id: str) -> list[dict]:
-    rows = _run(
-        """
-        MATCH (u:User {id: $user_id})-[:HAS_BEHAVIOR]->(b:Behavior)
-        RETURN b.id AS id, b.description AS description, b.category AS category,
-               b.usage_count AS usage_count, b.success_count AS success_count,
-               b.updated_at AS updated_at
-        ORDER BY b.updated_at DESC
-        """,
-        user_id=user_id,
-    )
-    return rows or []
-
-
-def save_behaviors(user_id: str, behaviors: list[dict]) -> None:
-    """Store freshly distilled behaviors. Each: {description, category}.
-    Then trim to the newest MAX_BEHAVIORS_PER_USER so a chatty user's profile
-    can't grow without bound (oldest, least-recently-updated go first)."""
-    if not behaviors:
-        return
-    now = time.time()
-    _run(
-        """
-        MATCH (u:User {id: $user_id})
-        UNWIND $items AS item
-          CREATE (b:Behavior {id: item.id, description: item.description,
-                              category: item.category, usage_count: 0,
-                              success_count: 0, created_at: $now, updated_at: $now})
-          MERGE (u)-[:HAS_BEHAVIOR]->(b)
-        """,
-        user_id=user_id, now=now,
-        items=[{"id": str(uuid.uuid4()),
-                "description": (b.get("description") or "")[:300],
-                "category": (b.get("category") or "habit")[:40]} for b in behaviors],
-    )
-    _run(
-        """
-        MATCH (u:User {id: $user_id})-[:HAS_BEHAVIOR]->(b:Behavior)
-        WITH b ORDER BY b.updated_at DESC
-        SKIP $keep
-        DETACH DELETE b
-        """,
-        user_id=user_id, keep=MAX_BEHAVIORS_PER_USER,
-    )
-
-
 def record_behavior_usage(behavior_ids: list[str], success: bool) -> None:
-    """Bump counters for behaviors the chat model said it actually relied on,
-    then hard-delete any that have proven wrong (used >= 3 times, < 30% success)
-    — bad memories should not linger the way retired skills do."""
     if not behavior_ids:
         return
     _run(
@@ -431,32 +571,19 @@ def record_behavior_usage(behavior_ids: list[str], success: bool) -> None:
     )
 
 
-def delete_all_behaviors(user_id: str) -> int:
-    """User-facing "forget me" — wipe the whole distilled profile."""
-    rows = _run(
-        """
-        MATCH (u:User {id: $user_id})-[:HAS_BEHAVIOR]->(b:Behavior)
-        DETACH DELETE b
-        RETURN count(*) AS deleted
-        """,
-        user_id=user_id,
-    )
-    return rows[0]["deleted"] if rows else 0
-
-
-# ── Diagnostics ─────────────────────────────────────────────────────────────
-
 def user_summary(user_id: str) -> dict | None:
-    """One-shot readback used for verification/tests: counts of everything
-    hanging off a user's ego graph."""
     rows = _run(
         """
         MATCH (u:User {id: $user_id})
         OPTIONAL MATCH (u)-[:UPLOADED]->(f:File)
         OPTIONAL MATCH (u)-[:PERFORMED]->(a:Action)
         OPTIONAL MATCH (u)-[:BUILT]->(r:Recipe)
+        OPTIONAL MATCH (u)-[:HAS_BEHAVIOR]->(b:Behavior)
+        OPTIONAL MATCH (u)-[:DEFINES]->(br:BusinessRule)
         RETURN u.email AS email, u.name AS name,
-               count(DISTINCT f) AS files, count(DISTINCT a) AS actions, count(DISTINCT r) AS recipes
+               count(DISTINCT f) AS files, count(DISTINCT a) AS actions,
+               count(DISTINCT r) AS recipes, count(DISTINCT b) AS behaviors,
+               count(DISTINCT br) AS business_rules
         """,
         user_id=user_id,
     )

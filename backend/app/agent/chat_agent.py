@@ -105,12 +105,8 @@ Choose ONE of the three modes, and output a SINGLE JSON matching the schema:
 - If the question is genuinely AMBIGUOUS and guessing wrong would produce a confidently WRONG number:
   {{"mode": "clarify", "clarify_question": "<một câu hỏi ngắn bằng tiếng Việt để làm rõ>", "clarify_options": ["<2-4 lựa chọn cụ thể, dùng đúng tên cột/sheet có thật>"], "reason": "<1-sentence>"}}
 
-When to use mode=clarify (an analyst asks instead of guessing):
-- Several columns could be the one meant ("doanh thu" but the data has both "Thành tiền" and "Doanh thu thuần").
-- The time frame is unclear ("tháng này" — tháng gần nhất trong dữ liệu, hay tháng hiện tại?).
-- The requested measure cannot be derived from the columns present (asked for lợi nhuận but there is no cost column) — say so and offer what IS possible.
-- The question spans several sheets and it is not obvious which one applies.
-DO NOT use clarify for questions that merely need a sensible default (e.g. "top 10" when no tie-break is stated) — only when a wrong guess yields a wrong NUMBER. Prefer answering; ask at most one question.
+- When to use mode=answer or mode=clarify for BLINDSPOTS:
+- If the question asks for a measure that is listed in the BLINDSPOTS block (e.g. asking for profit/margin when cost is missing, or asking for millisecond jitter when logs lack high-res timestamps), DO NOT invent code or guess: use mode="answer" to explain clearly what is missing and propose the closest computable alternative.
 
 Rules for writing code (mode=code):
 - The first table is available as `df`. ALL sheets/tables are in the `dfs` dictionary, key = source_id (e.g. "filename::sheet_name"). If the question refers to a specific sheet, use it: e.g., `dfs["report.xlsx::Revenue"]`.
@@ -118,7 +114,12 @@ Rules for writing code (mode=code):
 - Assign the final computed result (DataFrame, Series, or scalar) to the variable named `result`.
 - If a HELPER FUNCTIONS block is present above, PREFER calling a listed helper when it fits the question (they are already defined and tested) — e.g. `result = top_n_by(df, 'Cửa hàng', 'Doanh thu', 10)`. Do NOT redefine or import them; just call them. Write plain pandas only when no helper fits.
 - Use only valid column names present in the schema above.
-- TIME SERIES: for a "trend over time" question on granular dates (daily data spanning many weeks/months), aggregate to a sensible period so the result stays readable — prefer monthly (`df.groupby(df['col'].dt.to_period('M'))`) or weekly, SUM for additive measures (revenue/quantity). Only keep daily granularity if the user explicitly asks for it or the span is short. Parse dates with `pd.to_datetime(..., errors='coerce')`.
+- DOMAIN ARCHETYPE COMPUTATION:
+  * For Telemetry/DevOps/Logs: Use percentiles (`.quantile(0.95)`, `.quantile(0.99)`) for latency/request_time, calculate error rates (`(df['status'] >= 500).mean() * 100`), or count unique IPs/sessions.
+  * For Academic/Grades: Compute mean/median, pass/fail rates, or score histograms.
+  * For Scientific/Lab: Compute mean ± std, interquartile ranges, correlations (`.corr()`).
+  * For Transactional/Sales: Aggregate sums, average order value, growth rates.
+- TIME SERIES: for a "trend over time" question on granular dates (daily data spanning many weeks/months), aggregate to a sensible period so the result stays readable — prefer monthly (`df.groupby(df['col'].dt.to_period('M'))`) or weekly. Parse dates with `pd.to_datetime(..., errors='coerce')`.
 
 - MEMORY SYNC (CRITICAL): If a MEMORY block is present below, those are durable notes about THIS user's habits and preferences from past sessions. You MUST explicitly review them. If a memory dictates a preference (e.g., "prefers pie charts", "aggregates by week", "focuses on region X"), you MUST incorporate it into your pandas code or chart selection. When you apply one or more notes, list their ids in "used_memory_ids". Do NOT ignore user habits.
 """
@@ -191,13 +192,29 @@ HELPER FUNCTIONS - hàm phân tích đã có sẵn (gọi trực tiếp trong co
 """
 
 
-def _memory_block(behaviors: list[dict]) -> str:
-    if not behaviors:
+def _memory_block(behaviors: list[dict], user_id: str | None = None) -> str:
+    from app.memory import graph
+    lines = []
+    if behaviors:
+        lines.append("📌 Thói quen & Sở thích đã củng cố (Bubble Weight):")
+        for b in behaviors:
+            w = b.get("weight", 1)
+            bubble_tag = f"[Trọng số: {w}]" if w > 1 else ""
+            lines.append(f"  - [{b['id']}] ({b.get('category', 'habit')}) {b['description']} {bubble_tag}")
+
+    if user_id and graph.ENABLED:
+        try:
+            rules = graph.get_business_rules(user_id)
+            if rules:
+                lines.append("\n📖 Luật nghiệp vụ riêng của người dùng này (BẮT BUỘC tuân thủ):")
+                for r in rules:
+                    lines.append(f"  - [{r.get('concept_name')}]: {r.get('formula_desc')} (Trọng số: {r.get('weight', 1)})")
+        except Exception:
+            pass
+
+    if not lines:
         return ""
-    notes = "\n".join(
-        f"- [{b['id']}] ({b.get('category', 'habit')}) {b['description']}" for b in behaviors
-    )
-    return _MEMORY_BLOCK_TEMPLATE.format(notes=notes)
+    return _MEMORY_BLOCK_TEMPLATE.format(notes="\n".join(lines))
 
 
 def _load_chat_skills(question: str, user_id: str | None, top_k: int = 5):
@@ -465,12 +482,30 @@ def answer_question(profiles: list[dict], dataframes: dict, question: str, histo
     user's own personal skills, never another user's.
     "workspace_block" is build_workspace_context()'s view of the dashboard the
     user is looking at - the chat must never answer blind to it."""
+    # Natural Language Memory Erasure Handler
+    q_lower = question.lower().strip()
+    from app.memory import graph
+    if user_id and graph.ENABLED:
+        if any(kw in q_lower for kw in ["xóa tất cả ký ức", "xóa hết bộ nhớ", "quên hết về tôi", "clear all memory", "forget everything"]):
+            deleted = graph.delete_all_user_memories(user_id)
+            return {"answer": f"🧹 **Đã xóa toàn bộ {deleted} ký ức và thói quen** của bạn khỏi đồ thị Neo4j. AI giờ đây không còn lưu bất kỳ thông tin cá nhân nào.",
+                    "code": None, "table": None, "chart": None, "scalar": None, "error": None,
+                    "follow_up": ["Bắt đầu phân tích dữ liệu mới?"], "used_memory_ids": []}
+
+        if any(kw in q_lower for kw in ["xóa ký ức", "quên thói quen", "đừng nhớ", "xóa luật", "quên đi", "xóa công thức"]):
+            deleted_items = graph.forget_memory_by_text(user_id, question)
+            if deleted_items:
+                items_str = "\n".join(f"- {it}" for it in deleted_items)
+                return {"answer": f"🧹 **Đã xóa các ký ức sau khỏi bộ não AI**:\n{items_str}",
+                        "code": None, "table": None, "chart": None, "scalar": None, "error": None,
+                        "follow_up": ["Tiếp tục phân tích?"], "used_memory_ids": []}
+
     schema = _schema_text(profiles, dataframes, semantics, eda_facts)
     skills_block, skills_source, skills_env = _load_chat_skills(question, user_id)
     decision_prompt = _DECISION_PROMPT.format(
         schema=schema, history=_history_text(history), question=question,
         workspace_block=workspace_block,
-        memory_block=_memory_block(behaviors or []), skills_block=skills_block,
+        memory_block=_memory_block(behaviors or [], user_id=user_id), skills_block=skills_block,
     )
 
     _step("🧠 Đang đọc câu hỏi và chọn hướng trả lời...")
