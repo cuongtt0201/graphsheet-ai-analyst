@@ -15,13 +15,15 @@ import {
   type SavedReport,
   type TableResult,
 } from "../api";
-import UniverGrid, { type GridSheet } from "./UniverGrid";
+import type { GridSheet } from "./UniverGrid";
 import Tour, { type TourStep } from "./Tour";
 import MiniChart from "./MiniChart";
 import SkeletonGrid from "./SkeletonGrid";
 import WorkBench, { type EngineState } from "./WorkBench";
-import BIExplore from "./BIExplore";
 import AuthBar from "./AuthBar";
+
+const UniverGrid = React.lazy(() => import("./UniverGrid"));
+const BIExplore = React.lazy(() => import("./BIExplore"));
 
 const Logo = () => (
   <svg className="graphsheet-logo-svg" viewBox="0 0 32 32" width="28" height="28" style={{ marginRight: '10px' }}>
@@ -2255,13 +2257,17 @@ function isExecutiveReportRequest(query: string): boolean {
               ) : viewMode === "bi" && activeSheet ? (
                 <div style={{ flex: 1, overflow: "hidden" }}>
                   <ViewErrorBoundary>
-                    <BIExplore grid={activeSheet.grid} />
+                    <React.Suspense fallback={<div className="chat-empty" style={{ flex: 1 }}><p>Đang nạp BI Explorer…</p></div>}>
+                      <BIExplore grid={activeSheet.grid} />
+                    </React.Suspense>
                   </ViewErrorBoundary>
                 </div>
               ) : (
                 <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
                   <ViewErrorBoundary>
-                    <UniverGrid sheet={activeSheet} />
+                    <React.Suspense fallback={<div className="chat-empty" style={{ flex: 1 }}><p>Đang nạp bảng tính…</p></div>}>
+                      <UniverGrid sheet={activeSheet} />
+                    </React.Suspense>
                   </ViewErrorBoundary>
                 </div>
               )}
