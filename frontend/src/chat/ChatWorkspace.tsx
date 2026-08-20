@@ -2496,7 +2496,7 @@ function isExecutiveReportRequest(query: string): boolean {
                   </ViewErrorBoundary>
                 </div>
               ) : (
-                <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+                <div className="univer-wrapper" style={{ flex: "1 1 auto", position: "relative", minHeight: 0, display: "flex", flexDirection: "column" }}>
                   <ViewErrorBoundary>
                     <React.Suspense fallback={<div className="chat-empty" style={{ flex: 1 }}><p>Đang nạp bảng tính…</p></div>}>
                       <UniverGrid sheet={activeSheet} revision={gridRevision} />
