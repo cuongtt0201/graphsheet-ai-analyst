@@ -17,6 +17,15 @@ from app.agent.chart_renderer import render_chart_to_png
 logger = logging.getLogger(__name__)
 
 
+class ExportDependencyError(RuntimeError):
+    """A rendering library this exporter needs is not installed.
+
+    Raised instead of returning an empty buffer: a 0-byte .pptx reaches the
+    browser as a successful download that no program can open, so the failure
+    has to surface as an error the router can turn into a 503.
+    """
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 1. Word Document (.docx) Exporter with Embedded Charts & Tables
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -28,12 +37,18 @@ def export_report_to_docx(
     created_at: float | None = None,
 ) -> io.BytesIO:
     """Render a comprehensive executive report as a styled .docx document with embedded charts."""
-    from docx import Document
-    from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.oxml import OxmlElement, parse_xml
-    from docx.oxml.ns import nsdecls, qn
-    from docx.shared import Inches, Pt, RGBColor
+    try:
+        from docx import Document
+        from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml import OxmlElement, parse_xml
+        from docx.oxml.ns import nsdecls, qn
+        from docx.shared import Inches, Pt, RGBColor
+    except ImportError as exc:
+        logger.error("[exporter] python-docx is not installed, cannot render .docx")
+        raise ExportDependencyError(
+            "Máy chủ chưa cài python-docx nên không thể xuất file .docx."
+        ) from exc
 
     doc = Document()
 
@@ -228,9 +243,11 @@ def export_report_to_pptx(
         from pptx.util import Inches, Pt
         from pptx.dml.color import RGBColor
         from pptx.enum.text import PP_ALIGN
-    except ImportError:
-        logger.warning("[exporter] python-pptx is not installed, fallback to empty buffer")
-        return io.BytesIO()
+    except ImportError as exc:
+        logger.error("[exporter] python-pptx is not installed, cannot render .pptx")
+        raise ExportDependencyError(
+            "Máy chủ chưa cài python-pptx nên không thể xuất file .pptx."
+        ) from exc
 
     prs = Presentation()
     prs.slide_width = Inches(13.333)  # 16:9 Widescreen
@@ -422,10 +439,16 @@ def export_data_and_charts_to_xlsx(
     summary: str = "",
 ) -> io.BytesIO:
     """Render a clean, professional multi-sheet Excel workbook complete with embedded chart images."""
-    import openpyxl
-    from openpyxl.drawing.image import Image
-    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-    from openpyxl.utils import get_column_letter
+    try:
+        import openpyxl
+        from openpyxl.drawing.image import Image
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError as exc:
+        logger.error("[exporter] openpyxl is not installed, cannot render .xlsx")
+        raise ExportDependencyError(
+            "Máy chủ chưa cài openpyxl nên không thể xuất file .xlsx."
+        ) from exc
 
     wb = openpyxl.Workbook()
     

@@ -80,3 +80,35 @@ def test_identifier_detected_by_column_name_without_leading_zero():
     out = clean_dataframe_silently(df)
     assert list(out["Mã KH"]) == ["1001", "1002", "1003", "1004", "1005"]
     assert pd.api.types.is_numeric_dtype(out["Số lượng"])
+
+
+def test_identifier_hints_match_whole_words_not_substrings():
+    """"Covid" contains "id" and "Market" contains "ma" — neither is an identifier.
+
+    Substring matching froze these numeric columns as text on every upload,
+    which never surfaced as an error because the cleaner runs silently.
+    """
+    df = pd.DataFrame({
+        "Covid cases": ["1.200", "3.400", "5.600", "7.800", "9.100"],
+        "Market share": ["12", "45", "7", "103", "88"],
+        "Video views": ["1.000", "2.000", "3.000", "4.000", "5.000"],
+    })
+    out = clean_dataframe_silently(df)
+    for col in df.columns:
+        assert pd.api.types.is_numeric_dtype(out[col]), f"{col} bị nhận nhầm là cột định danh"
+    assert float(out["Covid cases"].iloc[0]) == 1200.0
+
+
+def test_identifier_hints_still_match_across_separators():
+    """Real identifier columns keep working whatever separator joins the tokens."""
+    df = pd.DataFrame({
+        "Ma_KH": ["1001", "1002", "1003", "1004", "1005"],
+        "Số hoá đơn": ["7001", "7002", "7003", "7004", "7005"],
+        "customer-id": ["5001", "5002", "5003", "5004", "5005"],
+        "Doanh thu": ["1.500.000", "2.400.000", "900.000", "3.100.000", "750.000"],
+    })
+    out = clean_dataframe_silently(df)
+    assert list(out["Ma_KH"]) == ["1001", "1002", "1003", "1004", "1005"]
+    assert list(out["Số hoá đơn"]) == ["7001", "7002", "7003", "7004", "7005"]
+    assert list(out["customer-id"]) == ["5001", "5002", "5003", "5004", "5005"]
+    assert pd.api.types.is_numeric_dtype(out["Doanh thu"])

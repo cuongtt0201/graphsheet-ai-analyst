@@ -312,19 +312,22 @@ def download_report_docx(request: Request, report_id: str):
     if entry is None:
         raise HTTPException(404, "Báo cáo không tồn tại trong phiên này.")
 
-    from app.agent.exporter import export_report_to_docx
+    from app.agent.exporter import ExportDependencyError, export_report_to_docx
 
     report = entry["report"]
     # Charts live under the session layout ("layout" -> "charts"), which is
     # where tools.py writes them. Reading a top-level state["charts"] found
     # nothing and silently produced chart-less documents.
     charts = (state.get("layout") or {}).get("charts") or []
-    out = export_report_to_docx(
-        title=entry.get("title", "Báo Cáo Điều Hành"),
-        report=report,
-        charts=charts,
-        created_at=entry.get("created_at"),
-    )
+    try:
+        out = export_report_to_docx(
+            title=entry.get("title", "Báo Cáo Điều Hành"),
+            report=report,
+            charts=charts,
+            created_at=entry.get("created_at"),
+        )
+    except ExportDependencyError as exc:
+        raise HTTPException(503, str(exc)) from exc
     return StreamingResponse(
         out,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -340,19 +343,22 @@ def download_report_pptx(request: Request, report_id: str):
     if entry is None:
         raise HTTPException(404, "Báo cáo không tồn tại trong phiên này.")
 
-    from app.agent.exporter import export_report_to_pptx
+    from app.agent.exporter import ExportDependencyError, export_report_to_pptx
 
     report = entry["report"]
     # Charts live under the session layout ("layout" -> "charts"), which is
     # where tools.py writes them. Reading a top-level state["charts"] found
     # nothing and silently produced chart-less documents.
     charts = (state.get("layout") or {}).get("charts") or []
-    out = export_report_to_pptx(
-        title=entry.get("title", "Báo Cáo Điều Hành"),
-        report=report,
-        charts=charts,
-        created_at=entry.get("created_at"),
-    )
+    try:
+        out = export_report_to_pptx(
+            title=entry.get("title", "Báo Cáo Điều Hành"),
+            report=report,
+            charts=charts,
+            created_at=entry.get("created_at"),
+        )
+    except ExportDependencyError as exc:
+        raise HTTPException(503, str(exc)) from exc
     return StreamingResponse(
         out,
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -368,7 +374,7 @@ def download_report_xlsx(request: Request, report_id: str):
     if entry is None:
         raise HTTPException(404, "Báo cáo không tồn tại trong phiên này.")
 
-    from app.agent.exporter import export_data_and_charts_to_xlsx
+    from app.agent.exporter import ExportDependencyError, export_data_and_charts_to_xlsx
 
     report = entry["report"]
     # Charts live under the session layout ("layout" -> "charts"), which is
@@ -378,12 +384,15 @@ def download_report_xlsx(request: Request, report_id: str):
     dfs = state.get("dataframes") or {}
     summary = report.get("executive_summary", "")
 
-    out = export_data_and_charts_to_xlsx(
-        title=entry.get("title", "Báo Cáo Điều Hành"),
-        dataframes=dfs,
-        charts=charts,
-        summary=summary,
-    )
+    try:
+        out = export_data_and_charts_to_xlsx(
+            title=entry.get("title", "Báo Cáo Điều Hành"),
+            dataframes=dfs,
+            charts=charts,
+            summary=summary,
+        )
+    except ExportDependencyError as exc:
+        raise HTTPException(503, str(exc)) from exc
     return StreamingResponse(
         out,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

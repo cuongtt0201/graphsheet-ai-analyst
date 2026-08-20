@@ -32,12 +32,28 @@ _NULL_LITERALS = {"n/a", "na", "null", "none", "-", "--", "nil", "nan", "#n/a", 
 _LEADING_ZERO = re.compile(r"^0\d")
 
 # Column names that mean "identifier" even when every value is digits and no
-# leading zero happens to appear in the sample.
+# leading zero happens to appear in the sample. Each entry is matched as a whole
+# word, never as a substring: short hints like "id" and "ma" occur inside
+# ordinary words ("Covid", "Video", "Market", "Thanh toan"), and a substring
+# match there would freeze a real numeric column as text on every upload.
+# Multi-word hints ("hoa don") are matched as an adjacent word sequence.
 _ID_NAME_HINTS = (
-    "mã", "ma_", "_ma", "code", "id", "sđt", "sdt", "phone", "điện thoại",
+    "mã", "ma", "code", "id", "sđt", "sdt", "phone", "điện thoại",
     "dien thoai", "cccd", "cmnd", "mst", "thuế", "thue", "tax", "stk",
     "tài khoản", "tai khoan", "account", "barcode", "serial", "zip",
-    "postcode", "bưu chính", "buu chinh", "invoice", "hóa đơn", "hoa don",
+    "postcode", "bưu chính", "buu chinh", "invoice", "hoa don",
+    # Vietnamese tolerates both "hóa đơn" and "hoá đơn"; whole-word matching
+    # means the two spellings are genuinely distinct tokens, so list both.
+    "hóa đơn", "hoá đơn",
+)
+
+# Split on anything that is not a letter or digit, so "Ma_KH", "Mã-KH",
+# "Ma.KH" and "Mã KH" all tokenize the same way.
+_NAME_SPLIT = re.compile(r"[^0-9a-zà-ỹ]+", re.UNICODE)
+
+# Pre-split the hints once: each becomes a tuple of tokens to match in sequence.
+_ID_HINT_TOKENS = tuple(
+    tuple(t for t in _NAME_SPLIT.split(hint) if t) for hint in _ID_NAME_HINTS
 )
 
 
@@ -52,8 +68,15 @@ def _is_identifier_column(col_name: str, sample: pd.Series) -> bool:
     for val in sample:
         if _LEADING_ZERO.match(str(val).strip()):
             return True
-    name = str(col_name).strip().lower()
-    return any(hint in name for hint in _ID_NAME_HINTS)
+
+    tokens = [t for t in _NAME_SPLIT.split(str(col_name).strip().lower()) if t]
+    if not tokens:
+        return False
+    for hint in _ID_HINT_TOKENS:
+        n = len(hint)
+        if n and any(tuple(tokens[i:i + n]) == hint for i in range(len(tokens) - n + 1)):
+            return True
+    return False
 
 
 def clean_dataframe_silently(df: pd.DataFrame) -> pd.DataFrame:

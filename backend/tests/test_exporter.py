@@ -75,3 +75,27 @@ def test_export_data_and_charts_to_xlsx():
     data = buf.getvalue()
     assert len(data) > 3000
     assert data[:4] == b"PK\x03\x04"
+
+
+def test_missing_render_library_raises_instead_of_empty_buffer(monkeypatch):
+    """A 0-byte .pptx downloads as a "success" no program can open.
+
+    The failure has to reach the router as an exception so it becomes a 503.
+    """
+    import builtins
+
+    import pytest
+
+    from app.agent.exporter import ExportDependencyError
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "pptx" or name.startswith("pptx."):
+            raise ImportError("No module named 'pptx'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(ExportDependencyError):
+        export_report_to_pptx("Báo Cáo", {"executive_summary": "x"})
