@@ -1012,13 +1012,14 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
     }
   };
 
-  const handleDownloadReport = async (id: string) => {
+  const handleDownloadReport = async (id: string, format: "docx" | "pptx" | "xlsx" = "docx") => {
     try {
-      const blob = await api.downloadReport(id);
+      const blob = await api.downloadReport(id, format);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `BaoCao_${id.slice(0, 8)}.docx`;
+      const ext = format === "pptx" ? "pptx" : format === "xlsx" ? "xlsx" : "docx";
+      a.download = `BaoCao_${id.slice(0, 8)}.${ext}`;
       document.body.appendChild(a);
       a.click();
       setTimeout(() => {
@@ -1029,6 +1030,7 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
       alert(`Không thể tải báo cáo: ${(e as Error).message}`);
     }
   };
+
 
   useEffect(() => {
     if (activeKey === "dashboard" || activeKey === "") {
@@ -2218,14 +2220,30 @@ function isExecutiveReportRequest(query: string): boolean {
                       <strong style={{ display: "block", marginBottom: "0.4rem" }}>
                         📄 Báo cáo điều hành
                         {report.id && (
-                          <button
-                            className="button button--small button--secondary"
-                            style={{ marginLeft: "10px" }}
-                            onClick={() => handleDownloadReport(report.id!)}
-                          >
-                            📥 Tải Word (.docx)
-                          </button>
+                          <span style={{ marginLeft: "10px" }}>
+                            <button
+                              className="button button--small button--secondary"
+                              style={{ marginRight: "4px" }}
+                              onClick={() => handleDownloadReport(report.id!, "docx")}
+                            >
+                              📥 Word (.docx)
+                            </button>
+                            <button
+                              className="button button--small button--secondary"
+                              style={{ marginRight: "4px" }}
+                              onClick={() => handleDownloadReport(report.id!, "pptx")}
+                            >
+                              📙 Slide (.pptx)
+                            </button>
+                            <button
+                              className="button button--small button--secondary"
+                              onClick={() => handleDownloadReport(report.id!, "xlsx")}
+                            >
+                              📊 Excel (.xlsx)
+                            </button>
+                          </span>
                         )}
+
                       </strong>
                       <p style={{ fontStyle: "italic", margin: "0.4rem 0" }}>{report.executive_summary}</p>
                       {report.key_findings.length > 0 && (

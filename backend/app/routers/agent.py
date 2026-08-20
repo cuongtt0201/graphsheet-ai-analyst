@@ -305,44 +305,91 @@ def list_reports(request: Request):
 
 
 @router.get("/reports/{report_id}/download")
-def download_report(request: Request, report_id: str):
-    """Render one saved report as a Word (.docx) file."""
+def download_report_docx(request: Request, report_id: str):
+    """Render one saved report as a Word (.docx) file with embedded charts."""
     state = get_state(request)
     entry = next((r for r in (state.get("reports") or []) if r["id"] == report_id), None)
     if entry is None:
         raise HTTPException(404, "Báo cáo không tồn tại trong phiên này.")
 
-    import io
-    from docx import Document
+    from app.agent.exporter import export_report_to_docx
 
     report = entry["report"]
-    doc = Document()
-    doc.add_heading("BÁO CÁO ĐIỀU HÀNH", 0)
-    doc.add_paragraph(entry["title"])
-    doc.add_paragraph(datetime.fromtimestamp(entry["created_at"]).strftime("Ngày tạo: %d/%m/%Y %H:%M"))
-
-    doc.add_heading("Tóm tắt điều hành", level=1)
-    doc.add_paragraph(report.get("executive_summary", ""))
-
-    sections = [
-        ("Phát hiện chính", report.get("key_findings") or []),
-        ("Bất thường", report.get("anomalies") or []),
-        ("Đề xuất", report.get("recommendations") or []),
-    ]
-    for title, lines in sections:
-        if lines:
-            doc.add_heading(title, level=1)
-            for line in lines:
-                doc.add_paragraph(str(line), style="List Bullet")
-
-    out = io.BytesIO()
-    doc.save(out)
-    out.seek(0)
+    # Charts live under the session layout ("layout" -> "charts"), which is
+    # where tools.py writes them. Reading a top-level state["charts"] found
+    # nothing and silently produced chart-less documents.
+    charts = (state.get("layout") or {}).get("charts") or []
+    out = export_report_to_docx(
+        title=entry.get("title", "Báo Cáo Điều Hành"),
+        report=report,
+        charts=charts,
+        created_at=entry.get("created_at"),
+    )
     return StreamingResponse(
         out,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f"attachment; filename=BaoCao_{report_id[:8]}.docx"},
     )
+
+
+@router.get("/reports/{report_id}/download/pptx")
+def download_report_pptx(request: Request, report_id: str):
+    """Render one saved report as an Executive PowerPoint (.pptx) Presentation."""
+    state = get_state(request)
+    entry = next((r for r in (state.get("reports") or []) if r["id"] == report_id), None)
+    if entry is None:
+        raise HTTPException(404, "Báo cáo không tồn tại trong phiên này.")
+
+    from app.agent.exporter import export_report_to_pptx
+
+    report = entry["report"]
+    # Charts live under the session layout ("layout" -> "charts"), which is
+    # where tools.py writes them. Reading a top-level state["charts"] found
+    # nothing and silently produced chart-less documents.
+    charts = (state.get("layout") or {}).get("charts") or []
+    out = export_report_to_pptx(
+        title=entry.get("title", "Báo Cáo Điều Hành"),
+        report=report,
+        charts=charts,
+        created_at=entry.get("created_at"),
+    )
+    return StreamingResponse(
+        out,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={"Content-Disposition": f"attachment; filename=SlideBaoCao_{report_id[:8]}.pptx"},
+    )
+
+
+@router.get("/reports/{report_id}/download/xlsx")
+def download_report_xlsx(request: Request, report_id: str):
+    """Render one saved report as an Excel (.xlsx) workbook with charts and formatted data sheets."""
+    state = get_state(request)
+    entry = next((r for r in (state.get("reports") or []) if r["id"] == report_id), None)
+    if entry is None:
+        raise HTTPException(404, "Báo cáo không tồn tại trong phiên này.")
+
+    from app.agent.exporter import export_data_and_charts_to_xlsx
+
+    report = entry["report"]
+    # Charts live under the session layout ("layout" -> "charts"), which is
+    # where tools.py writes them. Reading a top-level state["charts"] found
+    # nothing and silently produced chart-less documents.
+    charts = (state.get("layout") or {}).get("charts") or []
+    dfs = state.get("dataframes") or {}
+    summary = report.get("executive_summary", "")
+
+    out = export_data_and_charts_to_xlsx(
+        title=entry.get("title", "Báo Cáo Điều Hành"),
+        dataframes=dfs,
+        charts=charts,
+        summary=summary,
+    )
+    return StreamingResponse(
+        out,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=BaoCaoExcel_{report_id[:8]}.xlsx"},
+    )
+
 
 
 # ── Memory Management Endpoints ───────────────────────────────────────────
@@ -381,3 +428,29 @@ def clear_all_memory(request: Request):
     user_id = get_user_id(request)
     deleted_count = graph.delete_all_user_memories(user_id)
     return {"ok": True, "deleted_count": deleted_count}
+
+
+# ── Spreadsheet Copilot Endpoint (Sandbox Verified) ─────────────────────────
+
+@router.post("/sheet/copilot")
+def mutate_sheet_via_copilot(request: Request, body: dict):
+    """Execute AI Spreadsheet Copilot mutation with pre-flight Sandbox validation."""
+    prompt = body.get("prompt", "")
+    if not prompt:
+        raise HTTPException(400, "Thiếu prompt.")
+    state = get_state(request)
+    dfs = state.get("dataframes") or {}
+    profiles = state.get("profiles") or []
+    
+    from app.agent.chat_agent import _schema_text
+    from app.agent.sheet_copilot import apply_sheet_copilot_mutation
+    
+    schema_context = _schema_text(profiles, dfs)
+    result = apply_sheet_copilot_mutation(
+        user_prompt=prompt,
+        dataframes=dfs,
+        schema_context=schema_context,
+        sheet_id=body.get("sheet_id"),
+    )
+    return result
+

@@ -9,6 +9,7 @@ import io
 import pandas as pd
 
 from app.data.profiler import clean_and_profile
+from app.data.smart_cleaner import clean_dataframe_silently
 from app.data.smart_read import smart_read_grid
 from app.data.encoding_fix import read_csv_smart, fix_mojibake_df
 
@@ -30,6 +31,7 @@ def read_sheets(filename: str, content: bytes) -> dict[str, tuple[pd.DataFrame, 
     for name, raw_df in raw.items():
         raw_df = fix_mojibake_df(raw_df)
         df, meta = smart_read_grid(raw_df)
+        df = clean_dataframe_silently(df)
         cleaned, profile = clean_and_profile(df)
         profile["detection"] = meta
         out[name] = (cleaned, profile)

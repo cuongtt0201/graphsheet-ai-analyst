@@ -558,8 +558,11 @@ def answer_question(profiles: list[dict], dataframes: dict, question: str, histo
         user_id=user_id,
         initial_code=decision.get("code"),
         initial_hypothesis=reason,
+        skills_env=skills_env,
+        skills_source=skills_source,
         call_ai_fn=call_ai,
         run_pandas_fn=run_pandas,
     )
     alpha_res["used_memory_ids"] = used_memory_ids
     return alpha_res
+

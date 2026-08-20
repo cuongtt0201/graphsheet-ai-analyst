@@ -82,15 +82,31 @@ _HARVEST_SCHEMA = {
 }
 
 
+_LEARNING_TRIGGERS = [
+    "quy ước", "quy tắc", "công thức", "định nghĩa", "cách tính",
+    "bên tôi", "bên mình", "bên anh", "bên em", "bên cty", "bên công ty",
+    "từ nay", "từ giờ", "ghi nhớ", "nhớ là", "lưu ý là", "lưu ý:", "lưu ý giúp",
+    "không tính vào", "không được tính", "loại trừ", "bỏ qua dòng", "bỏ qua các",
+    "mặc định là", "mặc định dùng", "luôn luôn", "phải luôn",
+    "tôi thích", "mình thích", "anh thích", "em thích", "thích xem", "ưu tiên vẽ", "ưu tiên dùng",
+]
+
+
+def should_harvest_memory(user_prompt: str) -> bool:
+    """Pre-filter check to avoid calling LLM when prompt has no learning intent."""
+    if not user_prompt:
+        return False
+    prompt_lower = user_prompt.lower()
+    return any(t in prompt_lower for t in _LEARNING_TRIGGERS)
+
+
 def harvest_memory_sync(user_id: str, user_prompt: str, assistant_reply: str) -> dict:
     """Synchronous memory extraction and Neo4j persistence."""
     if not user_id or not user_prompt:
         return {"learned": False}
 
     # Heuristic fast pre-filter: skip if prompt doesn't look like an instruction/definition
-    prompt_lower = user_prompt.lower()
-    learning_triggers = ["phải", "luôn", "bên tôi", "bên anh", "bên em", "quy ước", "công thức", "định nghĩa", "nhé", "lưu ý", "nhớ", "đừng", "không tính", "trừ"]
-    if not any(t in prompt_lower for t in learning_triggers):
+    if not should_harvest_memory(user_prompt):
         return {"learned": False}
 
     try:
@@ -106,7 +122,7 @@ def harvest_memory_sync(user_id: str, user_prompt: str, assistant_reply: str) ->
             c_name = r.get("concept_name")
             f_desc = r.get("formula_desc")
             if c_name and f_desc:
-                graph.record_business_rule(
+                graph.save_or_merge_business_rule(
                     user_id=user_id,
                     concept_name=c_name,
                     formula_desc=f_desc,
@@ -118,7 +134,7 @@ def harvest_memory_sync(user_id: str, user_prompt: str, assistant_reply: str) ->
         for b in res.get("behaviors", []):
             desc = b.get("description")
             if desc:
-                graph.record_behavior(
+                graph.save_or_merge_behavior(
                     user_id=user_id,
                     description=desc,
                     category=b.get("category", "habit"),
@@ -132,7 +148,7 @@ def harvest_memory_sync(user_id: str, user_prompt: str, assistant_reply: str) ->
             "behaviors": saved_behaviors,
         }
     except Exception as exc:
-        logger.warning(f"[learner] Harvest failed gracefully: {exc}")
+        logger.exception(f"[learner] Harvest failed unexpectedly for user {user_id}: {exc}")
         return {"learned": False, "error": str(exc)}
 
 
@@ -146,3 +162,4 @@ def harvest_memory_async(user_id: str, user_prompt: str, assistant_reply: str) -
         daemon=True,
     )
     thread.start()
+

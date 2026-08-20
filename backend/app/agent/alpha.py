@@ -59,7 +59,7 @@ class InnerMonologueState:
         lines = [
             f"🧠 Ý THỨC NỘI TÂM (ALPHA MONOLOGUE):",
             f"- Ý định phân tích: {self.user_intent}",
-            f"- Giả thuyết hiện tại: {self.current_hypothesis} (Độ tin cậy: {self.confidence:.0%})",
+            f"- Giả thuyết hiện tại: {self.current_hypothesis}",
         ]
         if self.mind_shifts:
             lines.append("🔄 LỊCH SỬ BẺ LÁI (MIND SHIFTS):")
@@ -70,6 +70,20 @@ class InnerMonologueState:
             for f in self.collected_facts:
                 lines.append(f"  - {f}")
         return "\n".join(lines)
+
+
+def _columns_reference(dataframes: dict[str, pd.DataFrame]) -> str:
+    """The exact column list of every dataframe for sandbox code repair."""
+    lines = []
+    for sid, df in dataframes.items():
+        if df is None:
+            continue
+        cols = ", ".join(f"'{c}'" for c in df.columns)
+        lines.append(f"  dfs[\"{sid}\"] → [{cols}]")
+    return "\n".join(lines)
+
+
+CODE_RETRIES = 2
 
 
 def _emit(event: dict) -> None:
@@ -85,15 +99,17 @@ def run_alpha_cognition(
     user_id: str | None = None,
     initial_code: str | None = None,
     initial_hypothesis: str | None = None,
+    skills_env: dict | None = None,
+    skills_source: str = "",
     max_reflexion_turns: int = 1,
     call_ai_fn: Callable = call_ai,
     run_pandas_fn: Callable = run_pandas,
 ) -> dict:
     """Executes the Emergent Meta-Cognitive loop:
     1. Formulates initial hypothesis (or uses provided initial_code).
-    2. Generates & runs Python in Sandbox.
-    3. Receives Critic feedback.
-    4. Evaluates if a Mind Shift is warranted (Reflexion).
+    2. Generates & runs Python in Sandbox (with self-healing Code Retries).
+    3. Receives Critic feedback on valid execution.
+    4. Evaluates if a Mind Shift is warranted (Reflexion on true statistical anomalies).
     5. Returns unified response with chart/kpi and thought stream.
     """
     _emit({"type": "step", "message": "🧠 Alpha Orchestrator đang thiết lập dòng suy nghĩ nội tâm..."})
@@ -155,40 +171,86 @@ Trả về JSON:
     _emit({"type": "step", "message": "⚡ Đang giao việc cho Python Sandbox Worker..."})
     executed_code = code_to_run  # sync after planning may have updated code_to_run
 
-    # Step 2: Run in Sandbox
-    run_res = run_pandas_fn(code_to_run, dataframes)
-    
-    # Step 3: Critic evaluation
+    # Step 2: Run in Sandbox with Code Retry Loop
+    run_res = run_pandas_fn(code_to_run, dataframes, skills_env=skills_env, skills_source=skills_source)
+    retries = 0
+    while not run_res.get("ok") and retries < CODE_RETRIES:
+        retries += 1
+        error_msg = run_res.get("error", "Lỗi thực thi không xác định")
+        _emit({"type": "step", "message": f"⚙️ Đang tự động sửa lỗi mã Python (lần {retries}/{CODE_RETRIES})..."})
+
+        cols_ref = _columns_reference(dataframes)
+        fix_prompt = f"""Mã Python trước đó thực thi thất bại trong Sandbox. Hãy sửa lại code để chạy thành công.
+
+CÂU HỎI: "{question}"
+MÃ BỊ LỖI:
+```python
+{executed_code}
+```
+LỖI CHI TIẾT TỪ SANDBOX:
+{error_msg}
+
+DANH SÁCH CỘT THỰC TẾ TRONG DATAFRAME:
+{cols_ref}
+
+YÊU CẦU:
+1. Sửa lỗi chính xác theo thông báo lỗi (đặc biệt chú ý tên cột trong dfs['...']).
+2. Gán kết quả cuối cùng vào biến `result`.
+3. Chỉ trả về JSON với mã code mới.
+
+Trả về JSON:
+{{
+  "code": "<mã python đã sửa>",
+  "fix_explanation": "<giải thích ngắn gọn cách sửa>"
+}}
+"""
+        fix_schema = {
+            "type": "object",
+            "required": ["code"],
+            "properties": {
+                "code": {"type": "string"},
+                "fix_explanation": {"type": "string"},
+            }
+        }
+        try:
+            fix_res = call_ai_fn(fix_prompt, fix_schema, tier="strong")
+            new_code = fix_res.get("code", "")
+            if new_code:
+                executed_code = new_code
+                run_res = run_pandas_fn(new_code, dataframes, skills_env=skills_env, skills_source=skills_source)
+            else:
+                break
+        except Exception as exc:
+            logger.warning(f"[alpha] Code fix fallback: {exc}")
+            break
+
+    # Step 3: Critic evaluation (ONLY on successful execution)
     verdict = CriticVerdict()
+    final_run_res = run_res
     if run_res.get("ok"):
         verdict = critique_execution(run_res.get("kind", "text"), run_res.get("result"))
-    else:
-        verdict.is_valid = False
-        verdict.has_anomalies = True
-        verdict.anomaly_signals.append(f"Lỗi cú pháp / thực thi Python: {run_res.get('error')}")
-
-    # Step 4: Reflexion & Mind Shift Loop
-    final_run_res = run_res
-    if verdict.has_anomalies and max_reflexion_turns > 0:
-        trigger_msg = "; ".join(verdict.anomaly_signals or verdict.statistical_insights)
-        adapted_target = verdict.suggested_drill_down[0] if verdict.suggested_drill_down else "Đào sâu vào điểm bất thường được Critic cảnh báo"
         
-        shift = state.record_mind_shift(trigger_msg, adapted_target)
-        
-        # Broadcast Mind Shift event to UI
-        _emit({
-            "type": "step",
-            "message": f"🔄 Alpha đổi hướng: Phát hiện bất thường ({trigger_msg}) ➔ {adapted_target}",
-        })
-        _emit({
-            "type": "mind_shift",
-            "from": shift.previous_hypothesis,
-            "to": shift.adapted_hypothesis,
-            "signal": shift.triggering_signal,
-        })
+        # Step 4: Reflexion & Mind Shift Loop (ONLY on true statistical anomalies)
+        if verdict.has_anomalies and max_reflexion_turns > 0:
+            trigger_msg = "; ".join(verdict.anomaly_signals or verdict.statistical_insights)
+            adapted_target = verdict.suggested_drill_down[0] if verdict.suggested_drill_down else "Đào sâu vào điểm bất thường được Critic cảnh báo"
+            
+            shift = state.record_mind_shift(trigger_msg, adapted_target)
+            
+            # Broadcast Mind Shift event to UI
+            _emit({
+                "type": "step",
+                "message": f"🔄 Alpha đổi hướng: Phát hiện bất thường ({trigger_msg}) ➔ {adapted_target}",
+            })
+            _emit({
+                "type": "mind_shift",
+                "from": shift.previous_hypothesis,
+                "to": shift.adapted_hypothesis,
+                "signal": shift.triggering_signal,
+            })
 
-        # Generate refined drill-down code
-        refine_prompt = f"""Alpha đang thực hiện BẺ LÁI SUY NGHĨ (Mind Shift).
+            # Generate refined drill-down code
+            refine_prompt = f"""Alpha đang thực hiện BẺ LÁI SUY NGHĨ (Mind Shift) dựa trên số liệu thực tế.
 Giả thuyết cũ: {shift.previous_hypothesis}
 Tín hiệu bất thường từ Critic: {shift.triggering_signal}
 Mục tiêu mới: {shift.adapted_hypothesis}
@@ -202,26 +264,29 @@ Trả về JSON:
   "reason": "<lý do đổi mã>"
 }}
 """
-        refine_schema = {
-            "type": "object",
-            "required": ["code"],
-            "properties": {
-                "code": {"type": "string"},
-                "reason": {"type": "string"},
+            refine_schema = {
+                "type": "object",
+                "required": ["code"],
+                "properties": {
+                    "code": {"type": "string"},
+                    "reason": {"type": "string"},
+                }
             }
-        }
-        try:
-            refine_res = call_ai_fn(refine_prompt, refine_schema, tier="strong")
-            new_code = refine_res.get("code", "")
-            if new_code:
-                _emit({"type": "step", "message": "⚙️ Đang chạy phân tích đào sâu (Drill-down)..."})
-                second_run = run_pandas_fn(new_code, dataframes)
-                if second_run.get("ok"):
-                    final_run_res = second_run
-                    executed_code = new_code
-                    state.collected_facts.append(f"Đã đào sâu thành công theo hướng: {shift.adapted_hypothesis}")
-        except Exception as exc:
-            logger.warning(f"[alpha] Reflexion run fallback: {exc}")
+            try:
+                refine_res = call_ai_fn(refine_prompt, refine_schema, tier="strong")
+                new_code = refine_res.get("code", "")
+                if new_code:
+                    _emit({"type": "step", "message": "⚙️ Đang chạy phân tích đào sâu (Drill-down)..."})
+                    second_run = run_pandas_fn(new_code, dataframes, skills_env=skills_env, skills_source=skills_source)
+                    if second_run.get("ok"):
+                        final_run_res = second_run
+                        executed_code = new_code
+                        state.collected_facts.append(f"Đã đào sâu thành công theo hướng: {shift.adapted_hypothesis}")
+            except Exception as exc:
+                logger.warning(f"[alpha] Reflexion run fallback: {exc}")
+    else:
+        verdict.is_valid = False
+        verdict.anomaly_signals.append(f"Thực thi Python thất bại: {run_res.get('error')}")
 
     # Step 5: Synthesis & Storyteller
     _emit({"type": "step", "message": "📝 Alpha đang đúc kết phân tích và trực quan hóa..."})
@@ -230,7 +295,11 @@ Trả về JSON:
 
     result_preview = json.dumps(final_run_res.get("result"), ensure_ascii=False, default=str)[:4000]
     guard_feedback = verdict.format_for_monologue() if verdict.has_anomalies or verdict.statistical_insights else ""
-    shifts_summary = "\n".join(f"- Đã đổi hướng: {s.previous_hypothesis} ➔ {s.adapted_hypothesis} (vì {s.triggering_signal})" for s in state.mind_shifts) if state.mind_shifts else ""
+
+    # Restore Join warnings and non-additive metric guards
+    join_guards = (final_run_res.get("join_warnings") or []) + (final_run_res.get("non_additive") or [])
+    if join_guards:
+        guard_feedback += "\n\n⚠️ CẢNH BÁO TOÁN HỌC / GHÉP BẢNG:\n" + "\n".join(f"- {w}" for w in join_guards)
 
     interp_prompt = f"""Bạn là Alpha Storyteller — tổng hợp kết quả phân tích dữ liệu cho người dùng.
 CÂU HỎI: "{question}"
@@ -244,18 +313,22 @@ KẾT QUẢ ĐÃ TÍNH TỪ PYTHON:
 YÊU CẦU:
 1. Trả lời trực tiếp, rõ ràng, gãy gọn bằng tiếng Việt. Nếu có Mind Shift (bẻ lái do phát hiện bất thường), hãy chỉ rõ phát hiện bất ngờ đó cho người dùng.
 2. CHỈ DÙNG các con số có thật trong kết quả ở trên. Tuyệt đối không bịa số.
-3. Nếu dữ liệu phù hợp vẽ biểu đồ (so sánh, xu hướng, tỷ trọng), xuất cấu hình chart hợp lệ.
+3. Nếu dữ liệu phù hợp vẽ biểu đồ:
+   - Các biểu đồ cơ bản (so sánh, xu hướng, tỷ trọng): xuất type là "bar", "line" hoặc "pie".
+   - Các biểu đồ phức tạp (nhiều chiều, scatter, heatmap, grouped bar, stacked area): xuất type là "vega" và cung cấp đầy đủ "vegaLiteSpec" tự chứa dữ liệu values.
+   - Nếu không phù hợp vẽ biểu đồ, xuất chart là null.
 
 Trả về JSON:
 {{
   "answer": "<câu trả lời chi tiết, chuyên nghiệp>",
   "chart": {{
-    "type": "bar" / "line" / "pie",
+    "type": "bar" | "line" | "pie" | "vega",
     "title": "<tiêu đề ngắn>",
     "x_axis": "<tên cột x>",
     "y_axis": "<tên cột y>",
     "labels": ["nhãn 1", "nhãn 2"],
-    "values": [10, 20]
+    "values": [10, 20],
+    "vegaLiteSpec": {{}}
   }} hoặc null,
   "follow_up": ["3 câu hỏi đào sâu tiếp theo"]
 }}
@@ -265,7 +338,18 @@ Trả về JSON:
         "required": ["answer"],
         "properties": {
             "answer": {"type": "string"},
-            "chart": {"type": "object"},
+            "chart": {
+                "type": ["object", "null"],
+                "properties": {
+                    "type": {"type": "string", "enum": ["bar", "line", "pie", "vega"]},
+                    "title": {"type": "string"},
+                    "x_axis": {"type": "string"},
+                    "y_axis": {"type": "string"},
+                    "labels": {"type": "array", "items": {"type": "string"}},
+                    "values": {"type": "array", "items": {"type": ["number", "string", "null"]}},
+                    "vegaLiteSpec": {"type": "object"},
+                },
+            },
             "follow_up": {"type": "array", "items": {"type": "string"}},
         }
     }
@@ -306,6 +390,25 @@ Trả về JSON:
     table = final_run_res["result"] if final_run_res.get("kind") == "table" else None
     scalar = final_run_res["result"] if final_run_res.get("kind") == "scalar" else None
 
+    # Step 6: Bounded Root-Cause Investigation (when warranted by analytical query)
+    investigation = None
+    if final_run_res.get("ok"):
+        try:
+            from app.agent.investigator import should_investigate, run_investigation
+            warrants_inv, inv_hypo = should_investigate(question, result_preview)
+            if warrants_inv:
+                investigation = run_investigation(
+                    question=question,
+                    hypothesis=inv_hypo or state.current_hypothesis,
+                    schema_text=schema_context,
+                    dataframes=dataframes,
+                    skills_env=skills_env,
+                    skills_source=skills_source,
+                    ground_truth=answer_truths,
+                )
+        except Exception as exc:
+            logger.warning(f"[alpha] Investigation step fallback: {exc}")
+
     return {
         "ok": final_run_res.get("ok", False),
         "answer": answer,
@@ -319,4 +422,7 @@ Trả về JSON:
         "verdict": verdict.to_dict(),
         "monologue": state.to_summary(),
         "mind_shifts": [s.to_dict() for s in state.mind_shifts],
+        "investigation": investigation,
     }
+
+

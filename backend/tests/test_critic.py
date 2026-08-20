@@ -15,13 +15,36 @@ def test_critique_dataframe_negative_revenue():
 
 
 def test_critique_dataframe_extreme_concentration():
+    """Verify extreme concentration (>85%) triggers anomaly."""
     df = pd.DataFrame({
         "Sản phẩm": ["SP1", "SP2", "SP3", "SP4", "SP5"],
-        "Doanh số": [1000.0, 10.0, 5.0, 5.0, 2.0],  # SP1 is ~98% of total
+        "Doanh số": [1000.0, 10.0, 5.0, 5.0, 2.0],  # SP1 is ~97.8% of total (>85%)
     })
     verdict = critique_dataframe(df)
     assert verdict.has_anomalies is True
-    assert any("Độ tập trung cao" in s for s in verdict.statistical_insights)
+    assert any("Độ tập trung cao" in s for s in verdict.anomaly_signals)
+
+
+def test_critique_dataframe_moderate_pareto_does_not_trigger_anomaly():
+    """Verify standard Pareto (70%-80%) is treated as an insight, NOT an anomaly that forces Mind Shift."""
+    df = pd.DataFrame({
+        "Sản phẩm": ["SP1", "SP2", "SP3", "SP4", "SP5"],
+        "Doanh số": [75.0, 10.0, 5.0, 5.0, 5.0],  # SP1 is 75% of total (between 65% and 85%)
+    })
+    verdict = critique_dataframe(df)
+    assert verdict.has_anomalies is False
+    assert any("Phân phối Pareto" in s for s in verdict.statistical_insights)
+
+
+def test_critique_dataframe_small_sample_outlier_iqr():
+    """Verify outlier on small sample (n=10) is caught mathematically via IQR."""
+    df = pd.DataFrame({
+        "id": list(range(1, 11)),
+        "latency_ms": [10, 12, 11, 13, 10, 12, 11, 14, 12, 500],  # 500 is extreme outlier
+    })
+    verdict = critique_dataframe(df)
+    assert verdict.has_anomalies is True
+    assert any("ngoại lai cực trị" in s or "độ lệch chuẩn" in s for s in verdict.statistical_insights)
 
 
 def test_critique_scalar_nan_inf():

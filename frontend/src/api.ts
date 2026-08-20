@@ -516,8 +516,9 @@ export const api = {
   /** Report artifacts saved in this session (newest first). */
   reportsList: () => request<{ reports: SavedReport[] }>("/api/agent/reports"),
 
-  downloadReport: async (id: string): Promise<Blob> => {
-    const res = await fetch(`${BASE_URL}/api/agent/reports/${id}/download`, {
+  downloadReport: async (id: string, format: "docx" | "pptx" | "xlsx" = "docx"): Promise<Blob> => {
+    const subpath = format === "docx" ? "" : `/${format}`;
+    const res = await fetch(`${BASE_URL}/api/agent/reports/${id}/download${subpath}`, {
       credentials: "include",
     });
     if (!res.ok) {
@@ -526,6 +527,7 @@ export const api = {
     }
     return res.blob();
   },
+
 
   exportExcel: async (items: any[], palette?: string): Promise<Blob> => {
     const res = await fetch(`${BASE_URL}/api/export`, {

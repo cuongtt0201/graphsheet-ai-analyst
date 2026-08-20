@@ -88,24 +88,52 @@ def critique_dataframe(df: pd.DataFrame, max_cols: int = 15) -> CriticVerdict:
             )
             verdict.suggested_drill_down.append(f"Lọc các dòng có `{col} < 0` để phân tích nguyên nhân giảm trừ")
 
-        # Check extreme concentration (Pareto/Outliers: top 1 value accounts for >70% of sum)
+        # Check extreme concentration (Monopoly vs Pareto)
         if s_sum > 0 and len(series) >= 5:
             top_val = float(series.max())
             ratio = top_val / s_sum
-            if ratio > 0.70:
+            if ratio > 0.85:
+                # Extreme concentration / Monopoly -> Anomaly requiring drill-down
                 verdict.has_anomalies = True
-                verdict.statistical_insights.append(
+                verdict.anomaly_signals.append(
                     f"Độ tập trung cao bất thường ở cột '{col}': giá trị lớn nhất ({top_val:,.2f}) chiếm tới {ratio*100:.1f}% tổng số."
                 )
                 verdict.suggested_drill_down.append(f"Kiểm tra thực thể có `{col}` lớn nhất xem có phải ngoại lai (outlier)")
+            elif ratio >= 0.65:
+                # Normal/moderate Pareto distribution -> Insight for Storyteller without forcing expensive Mind Shift
+                verdict.statistical_insights.append(
+                    f"Phân phối Pareto: Giá trị lớn nhất ({top_val:,.2f}) chiếm {ratio*100:.1f}% tổng số cột '{col}'."
+                )
 
-        # Check standard deviation / extreme Z-score
-        std = float(series.std()) if len(series) > 1 else 0
-        if std > 0 and (s_max - s_mean) > 4 * std:
-            verdict.has_anomalies = True
-            verdict.statistical_insights.append(
-                f"Cột '{col}' xuất hiện giá trị cực trị vượt 4 độ lệch chuẩn ({s_max:,.2f} vs TB {s_mean:,.2f})."
-            )
+        # Outlier detection: robust IQR, falling back to a z-score.
+        #
+        # The n >= 8 gate is the whole reason this block does not double-flag an
+        # ordinary Pareto breakdown. Quartiles estimated from five points are
+        # noise, not statistics: a ranked 5-row result like [75, 10, 5, 5, 5]
+        # yields q75=10 and IQR=5, so the leading category clears any 3xIQR
+        # fence purely because it leads. Concentration ratio cannot separate the
+        # two cases either — the genuine outlier below (a 500ms latency among
+        # 10-14ms) sits at 82.6% of the sum while that harmless Pareto sits at
+        # 75%. Sample size separates them cleanly, and it is the honest reason:
+        # with fewer than ~8 points there is no "rest of the distribution" to be
+        # detached from. The z-score branch already required this; the IQR
+        # branch admitting n=5 is what let concentration masquerade as anomaly.
+        if len(series) >= 8:
+            q25, q75 = float(series.quantile(0.25)), float(series.quantile(0.75))
+            iqr = q75 - q25
+            if iqr > 0 and (s_max - q75) > 3.0 * iqr:
+                verdict.has_anomalies = True
+                verdict.statistical_insights.append(
+                    f"Cột '{col}' xuất hiện giá trị ngoại lai cực trị theo IQR ({s_max:,.2f} so với Q3={q75:,.2f}, IQR={iqr:,.2f})."
+                )
+                verdict.suggested_drill_down.append(f"Phân tích các dòng có `{col} > {q75 + 3.0*iqr:,.2f}`")
+            else:
+                std = float(series.std()) if len(series) > 1 else 0
+                if std > 0 and (s_max - s_mean) > 3.0 * std:
+                    verdict.has_anomalies = True
+                    verdict.statistical_insights.append(
+                        f"Cột '{col}' xuất hiện giá trị cực trị vượt 3 độ lệch chuẩn ({s_max:,.2f} vs TB {s_mean:,.2f})."
+                    )
 
     # 2. Text / Categorical columns cardinality check
     cat_cols = [c for c in cols if pd.api.types.is_string_dtype(df[c]) or pd.api.types.is_object_dtype(df[c])]
