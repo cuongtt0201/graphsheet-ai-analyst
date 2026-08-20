@@ -170,6 +170,10 @@ async def chat(request: Request, body: dict):
                     file_fingerprint=first_fp,
                 )
 
+                # Autonomous Memory Harvester (Agent Tự Học ngầm vào Neo4j)
+                from app.memory.learner import harvest_memory_async
+                harvest_memory_async(user_id, message, reply.get("text", ""))
+
                 # follow_up comes from answer_question() - the AI's own read of this
                 # file/answer. Just drop ones already asked in this conversation.
                 # Exception: on a clarify turn these are ANSWER options, not
@@ -196,7 +200,11 @@ async def chat(request: Request, body: dict):
         threading.Thread(target=worker, daemon=True).start()
 
         while True:
-            event = await anyio.to_thread.run_sync(q.get)
+            try:
+                event = await anyio.to_thread.run_sync(lambda: q.get(timeout=2.5))
+            except queue.Empty:
+                yield ndjson_line({"type": "ping"})
+                continue
             if event is SENTINEL:
                 break
             yield ndjson_line(event)

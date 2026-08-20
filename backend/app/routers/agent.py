@@ -99,7 +99,11 @@ async def run_code(request: Request, body: dict):
         threading.Thread(target=worker, daemon=True).start()
 
         while True:
-            event = await anyio.to_thread.run_sync(q.get)
+            try:
+                event = await anyio.to_thread.run_sync(lambda: q.get(timeout=2.5))
+            except queue.Empty:
+                yield ndjson_line({"type": "ping"})
+                continue
             if event is SENTINEL:
                 break
                 

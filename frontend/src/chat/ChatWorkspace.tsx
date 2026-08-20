@@ -733,8 +733,10 @@ function layoutChartToSpec(c: LiveChart): ChartSpec {
 const nf = new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 2 });
 const fmtCell = (v: string | number): string => (typeof v === "number" ? nf.format(v) : String(v));
 
-function tableToGrid(t: TableResult): (string | number)[][] {
-  return [t.columns, ...t.rows];
+function tableToGrid(t?: TableResult | null): (string | number)[][] {
+  if (!t || !Array.isArray(t.columns)) return [["Chưa có dữ liệu"]];
+  const rows = Array.isArray(t.rows) ? t.rows : [];
+  return [t.columns, ...rows];
 }
 
 interface ChatWorkspaceProps {
@@ -1522,6 +1524,11 @@ function isExecutiveReportRequest(query: string): boolean {
           }
         } else if (e.type === "reason") {
           setChatReason(e.message);
+        } else if (e.type === "mind_shift") {
+          const shiftMsg = `🔄 Alpha bẻ lái phân tích: ${e.from} ➔ ${e.to} (${e.signal || ""})`;
+          thoughts.push(shiftMsg);
+          setChatThoughts((prev) => [...prev, shiftMsg]);
+          setChatStage(`💡 Alpha đổi hướng: ${e.to}`);
         } else if (e.type === "error") {
           throw new Error(e.message);
         } else if (e.type === "done") {

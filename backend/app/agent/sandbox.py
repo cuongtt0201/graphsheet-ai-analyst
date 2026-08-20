@@ -87,6 +87,47 @@ _SAFE_BUILTINS = {
 }
 
 
+class SmartDataframeDict(dict):
+    """Resilient multi-key dictionary for DataFrames in sandbox.
+    Supports lookups by:
+    - Full source_id: dfs['DoanhThu.xlsx::Sheet1']
+    - Sheet name: dfs['Sheet1']
+    - Clean identifier: dfs['sheet1'], dfs['doanh_thu']
+    - Single sheet fallback
+    """
+    def __init__(self, raw_dict: dict[str, pd.DataFrame] | None = None):
+        super().__init__()
+        self._aliases: dict[str, str] = {}
+        if raw_dict:
+            for k, v in raw_dict.items():
+                self[k] = v
+
+    def __setitem__(self, key: str, value: pd.DataFrame):
+        super().__setitem__(key, value)
+        if isinstance(key, str):
+            clean_k = key.lower().strip()
+            self._aliases[clean_k] = key
+            if "::" in key:
+                sheet_part = key.split("::")[-1]
+                self._aliases[sheet_part.lower().strip()] = key
+                var_name = "".join(c if c.isalnum() else "_" for c in sheet_part).lower()
+                if var_name:
+                    self._aliases[var_name] = key
+
+    def __getitem__(self, key: str) -> pd.DataFrame:
+        if key in self:
+            return super().__getitem__(key)
+        if isinstance(key, str):
+            clean_k = key.lower().strip()
+            if clean_k in self._aliases:
+                return super().__getitem__(self._aliases[clean_k])
+            # If only 1 sheet exists, fallback gracefully
+            if len(self) == 1:
+                return next(iter(self.values()))
+        available = list(self.keys())
+        raise KeyError(f"Sheet '{key}' không tồn tại trong bộ dữ liệu. Các bảng có sẵn: {available}")
+
+
 class UnsafeCodeError(Exception):
     """The static scan rejected the snippet before running it."""
 
@@ -574,10 +615,17 @@ def run_pandas(code: str, dataframes: dict[str, pd.DataFrame],
                     **_join_verdict()}
         return {"ok": False, "error": container_res["error"]}
 
-    first_df = next(iter(dataframes.values()))
+    smart_dfs = SmartDataframeDict(dataframes)
+    first_df = next(iter(dataframes.values())) if dataframes else None
     local_env = dict(skills_env or {})
     local_env["df"] = first_df
-    local_env["dfs"] = dataframes
+    local_env["dfs"] = smart_dfs
+    for sid, frame in (dataframes or {}).items():
+        sheet_part = sid.split("::")[-1] if "::" in sid else sid
+        var_name = "".join(c if c.isalnum() else "_" for c in sheet_part)
+        if var_name.isidentifier() and var_name not in local_env:
+            local_env[var_name] = frame
+
     value, error = _run_local(
         code, local_env,
         result_var="result", timeout=CHAT_TIMEOUT_S,

@@ -699,13 +699,26 @@ function EmptyChart({ title, showTitle }: { title?: string; showTitle: boolean }
 }
 
 export default function MiniChart(props: { spec: ChartSpec; showTitle?: boolean }) {
-  const drawn = renderChart(props);
-  if (drawn) return drawn;
-  return <EmptyChart title={props.spec?.title} showTitle={props.showTitle ?? true} />;
+  if (!props.spec) {
+    return <EmptyChart title="" showTitle={props.showTitle ?? true} />;
+  }
+  try {
+    const drawn = renderChart(props);
+    if (drawn) return drawn;
+    return <EmptyChart title={props.spec?.title} showTitle={props.showTitle ?? true} />;
+  } catch (err) {
+    console.error("Failed to render MiniChart:", err);
+    return <EmptyChart title={props.spec?.title || "Lỗi biểu đồ"} showTitle={props.showTitle ?? true} />;
+  }
 }
 
 function renderChart({ spec, showTitle = true }: { spec: ChartSpec; showTitle?: boolean }) {
-  const { type, title, labels, values, series, points, matrix, rowLabels, target, max } = spec;
+  if (!spec) return null;
+  const rawLabels = Array.isArray(spec.labels) ? spec.labels : [];
+  const rawValues = Array.isArray(spec.values) ? spec.values : [];
+  const labels = rawLabels.map((l) => String(l ?? ""));
+  const values = rawValues.map((v) => (typeof v === "number" && !isNaN(v) ? v : Number(v) || 0));
+  const { type, title = "", series, points, matrix, rowLabels, target, max } = spec;
 
   if (type === "vega" && spec.vegaLiteSpec) {
     return (

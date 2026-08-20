@@ -148,6 +148,7 @@ export interface ChartSpec {
 export type ChatStreamEvent =
   | { type: "step"; message: string }
   | { type: "reason"; message: string }
+  | { type: "mind_shift"; from: string; to: string; signal?: string }
   | { type: "error"; message: string }
   | ({ type: "done" } & ChatReply);
 
@@ -173,6 +174,9 @@ export interface ChatReply {
    * Neither raises an error in pandas, so this is the only way the user learns
    * a total is inflated. */
   join_warnings?: string[];
+  /** Mind shifts recorded during Alpha Orchestrator cognitive loop */
+  mind_shifts?: { previous_hypothesis: string; adapted_hypothesis: string; triggering_signal: string }[];
+  monologue?: string;
   /** Present when the question warranted digging: the chain of findings the
    * bounded investigation loop produced, each verified against real numbers. */
   investigation?: {
@@ -294,6 +298,7 @@ export type LiveAgentEvent =
    *  ("thought" | "model" | "busy" | "escalate"). Both come from the backend so
    *  the UI never has to infer either from the message text. */
   | { type: "step"; message: string; stage?: number; kind?: string }
+  | { type: "mind_shift"; from: string; to: string; signal?: string }
   | EngineEvent
   | { type: "need_join_confirm"; proposal: JoinProposal["joins"]; tables: FileProfile[] }
   | ({ type: "done" } & LiveDashboardResult)
@@ -370,6 +375,7 @@ export const api = {
     const handleLine = (line: string) => {
       if (!line.trim()) return;
       const event = JSON.parse(line);
+      if (event.type === "ping") return;
       if (event.type === "step" || event.type === "engine") {
         onEvent(event);
       } else if (event.type === "done") {
@@ -437,10 +443,16 @@ export const api = {
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
       for (const line of lines) {
-        if (line.trim()) onEvent(JSON.parse(line) as ChatStreamEvent);
+        if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === "ping") continue;
+        onEvent(ev as ChatStreamEvent);
       }
     }
-    if (buffer.trim()) onEvent(JSON.parse(buffer) as ChatStreamEvent);
+    if (buffer.trim()) {
+      const ev = JSON.parse(buffer);
+      if (ev.type !== "ping") onEvent(ev as ChatStreamEvent);
+    }
   },
 
   buildDashboardAuto: async (prompt: string, onEvent: (e: LiveAgentEvent) => void, selectedSources?: string[]): Promise<void> => {
@@ -464,10 +476,16 @@ export const api = {
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
       for (const line of lines) {
-        if (line.trim()) onEvent(JSON.parse(line) as LiveAgentEvent);
+        if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === "ping") continue;
+        onEvent(ev as LiveAgentEvent);
       }
     }
-    if (buffer.trim()) onEvent(JSON.parse(buffer) as LiveAgentEvent);
+    if (buffer.trim()) {
+      const ev = JSON.parse(buffer);
+      if (ev.type !== "ping") onEvent(ev as LiveAgentEvent);
+    }
   },
 
   /** Executive "report-to-boss" narrative for whatever is currently pinned in

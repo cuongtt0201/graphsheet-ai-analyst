@@ -321,7 +321,7 @@ def _analyze_chunk(chunk: list[dict], dup_counts: dict[str, int], max_workers: i
     tasks = {k: _task_text(p, dup_counts.get(p.get("source_id"), 0)) for k, p in keys.items()}
 
     try:
-        results = batch_tasks(_BATCH_CONTEXT, tasks, tier="fast",
+        results = batch_tasks(_BATCH_CONTEXT, tasks, tier="strong",
                               schemas={k: SEMANTIC_SCHEMA for k in keys})
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"[semantics] batch failed, falling back per-sheet: {exc}")

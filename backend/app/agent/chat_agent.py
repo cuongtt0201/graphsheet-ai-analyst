@@ -549,143 +549,17 @@ def answer_question(profiles: list[dict], dataframes: dict, question: str, histo
                 "follow_up": decision.get("follow_up") or [],
                 "reason": reason, "used_memory_ids": used_memory_ids}
 
-    # mode == "code": run it, retrying on error by feeding the error back.
-    code = decision.get("code", "")
-    _step("⚙️ Đang chạy tính toán trên dữ liệu thật...")
-    run = run_pandas(code, dataframes, skills_env=skills_env, skills_source=skills_source)
-    attempt = 0
-    while not run["ok"] and attempt < CODE_RETRIES:
-        attempt += 1
-        _step(f"🔧 Code bị lỗi, đang tự sửa (lần {attempt}/{CODE_RETRIES})...")
-        # A KeyError means the model referenced a column that doesn't exist
-        # (usually invented from the sheet/file title). Re-state the exact
-        # column index next to the error so the fix attempt is grounded rather
-        # than another guess.
-        err_text = str(run["error"] or "")
-        hint = ""
-        if "KeyError" in err_text or "not in index" in err_text or "not found" in err_text:
-            hint = (
-                "\nTên cột bạn dùng KHÔNG tồn tại. Đây là danh sách cột CÓ THẬT — chỉ được dùng đúng các tên này:\n"
-                + columns_reference(dataframes)
-                + "\n"
-            )
-        fix_prompt = (
-            decision_prompt
-            + f"\n\nĐoạn code trước bị lỗi:\n{code}\nLỗi: {run['error']}\n{hint}"
-              "Sửa lại, xuất JSON mode=code với code đã sửa."
-        )
-        try:
-            decision = call_ai(fix_prompt, _DECISION_SCHEMA, tier="strong")
-        except AllModelsFailedError as exc:
-            return {"answer": None, "code": code, "table": None, "chart": None,
-                    "scalar": None, "error": f"AI không phản hồi được: {exc}",
-                    "follow_up": [], "used_memory_ids": used_memory_ids}
-        code = decision.get("code", code)
-        run = run_pandas(code, dataframes, skills_env=skills_env, skills_source=skills_source)
-
-    if not run["ok"]:
-        return {"answer": None, "code": code, "table": None, "chart": None,
-                "scalar": None, "error": run["error"], "reason": reason,
-                "follow_up": [], "used_memory_ids": used_memory_ids}
-
-    table = run["result"] if run["kind"] == "table" else None
-    result_preview = json.dumps(run["result"], ensure_ascii=False, default=str)[:4000]
-
-    # A merge inside the snippet can multiply the very totals the user trusts
-    # most, without pandas raising anything. The dashboard path has always been
-    # told about that; this path was not. Warn the MODEL first, so it does not
-    # narrate an inflated total as fact, then warn the user.
-    join_warnings = run.get("join_warnings") or []
-    non_additive = run.get("non_additive") or []
-    guard_block = ""
-    if join_warnings:
-        guard_block = "\n\n[CẢNH BÁO GHÉP BẢNG]\n" + "\n".join(f"- {w}" for w in join_warnings)
-        if non_additive:
-            guard_block += (
-                "\nTUYỆT ĐỐI KHÔNG mô tả tổng của các cột sau như một con số thật: "
-                + ", ".join(non_additive) + "."
-            )
-
-    _step("📝 Đang diễn giải kết quả thành câu trả lời...")
-    interpret_prompt = _INTERPRET_PROMPT.format(
-        question=question, code=code, result=result_preview, schema=schema
-    ) + guard_block
-    # Ground truth for the answer: the numbers the sandbox actually computed,
-    # plus those already in the schema block (column sums, ranges and sample
-    # values the profiler produced) — citing those is legitimate context, not
-    # invention.
-    from app.ai.harness import collect_ground_truth, collect_numbers_from_text, verify_numbers
-
-    answer_truths = collect_ground_truth(run["result"]) | collect_numbers_from_text(schema)
-
-    try:
-        interp = call_ai(interpret_prompt, _INTERPRET_SCHEMA, tier="strong")
-        answer = interp.get("answer", "")
-        # Same deterministic cap as the dashboard: a chart must never ship
-        # hundreds of points even if the computed result had them.
-        chart = condense_chat_chart(interp.get("chart"))
-        follow_up = interp.get("follow_up") or []
-
-        # The chat answer is the most-read output in the product and was the
-        # only prose path without a grounding gate — insights, reports and
-        # investigations all had one. Unlike those, an answer cannot simply be
-        # dropped (the user asked a question), so a violation buys one retry
-        # and then falls back to the same minimal reply used when the prose
-        # call fails outright: better to show the computed table with no
-        # narration than a narration with an invented number.
-        violations = verify_numbers(answer, answer_truths)
-        if violations:
-            bad = ", ".join(v["token"] for v in violations[:5])
-            _step("🔍 Phát hiện số chưa khớp kết quả tính — đang viết lại...")
-            try:
-                interp = call_ai(
-                    interpret_prompt
-                    + f"\n\nCÂU TRẢ LỜI TRƯỚC chứa số KHÔNG có trong kết quả đã tính: {bad}. "
-                      "Viết lại, CHỈ dùng đúng những con số xuất hiện trong KẾT QUẢ ở trên.",
-                    _INTERPRET_SCHEMA, tier="strong",
-                )
-                answer = interp.get("answer", "")
-                chart = condense_chat_chart(interp.get("chart"))
-                follow_up = interp.get("follow_up") or []
-            except AllModelsFailedError:
-                pass
-            if verify_numbers(answer, answer_truths):
-                logger.warning(f"[chat] ungrounded answer dropped: {answer[:80]}")
-                answer = "Đã tính xong (xem bảng kết quả bên dưới)."
-                follow_up = []
-    except AllModelsFailedError:
-        # Computation succeeded; only the prose failed - degrade gracefully.
-        answer = "Đã tính xong (xem bảng kết quả bên dưới)."
-        chart = None
-        follow_up = []
-
-    scalar = run["result"] if run["kind"] == "scalar" else None
-
-    # Investigation loop: an analyst does not stop at the first number when the
-    # question was really "why". The gate keeps ordinary lookups to one query.
-    investigation = None
-    try:
-        from app.agent.investigator import run_investigation, should_investigate
-
-        do_dig, hypothesis = should_investigate(question, result_preview)
-        if do_dig:
-            _step("🕵️ Câu này đáng đào sâu — bắt đầu điều tra...")
-            from app.ai.harness import collect_ground_truth
-
-            investigation = run_investigation(
-                question=question, hypothesis=hypothesis, schema_text=schema,
-                dataframes=dataframes, skills_env=skills_env,
-                skills_source=skills_source,
-                ground_truth=collect_ground_truth(run["result"]),
-            )
-    except Exception as exc:  # noqa: BLE001 - the plain answer must still ship
-        logger.warning(f"[chat] investigation skipped: {exc}")
-
-    return {"answer": answer, "code": code, "table": table, "chart": chart, "follow_up": follow_up,
-            "scalar": scalar, "error": None, "reason": reason,
-            "investigation": investigation,
-            # Shown to the user, not just fed to the model: a total that is
-            # quietly several times too big is exactly the failure they would
-            # never catch on their own.
-            "join_warnings": join_warnings,
-            "used_memory_ids": used_memory_ids}
+    # mode == "code": Dispatch to the Alpha Meta-Cognitive Orchestrator (Bầy Agent Trồi Sinh)
+    from app.agent.alpha import run_alpha_cognition
+    alpha_res = run_alpha_cognition(
+        question=question,
+        dataframes=dataframes,
+        schema_context=schema,
+        user_id=user_id,
+        initial_code=decision.get("code"),
+        initial_hypothesis=reason,
+        call_ai_fn=call_ai,
+        run_pandas_fn=run_pandas,
+    )
+    alpha_res["used_memory_ids"] = used_memory_ids
+    return alpha_res

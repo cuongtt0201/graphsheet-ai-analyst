@@ -287,7 +287,8 @@ async def upload(request: Request, files: list[UploadFile]):
                 for p in profiles:
                     raw = raw_grids.get(p["source_id"])
                     raw_len = len(raw["grid"]) if raw else 0
-                    p["grid"] = raw["grid"] if (raw and p["source_id"] == initial_sid) else None
+                    # Initial payload gets a compact preview (500 rows); full grid fetched on demand via /api/sheet
+                    p["grid"] = (raw["grid"][:500] if raw and raw.get("grid") else None) if (raw and p["source_id"] == initial_sid) else None
                     # Use actual row_count from profiling for accurate count display
                     p["grid_rows"] = p.get("row_count", raw_len)
                     p["has_data"] = p["grid_rows"] > 0
@@ -368,14 +369,15 @@ async def upload(request: Request, files: list[UploadFile]):
                 
                 # Proactive Recipe Recall: Check if user built a dashboard on this exact structure before
                 if not is_sample and active_fp:
-                    matching_recipe = graph.find_matching_recipe(user_id, active_fp)
-                    if matching_recipe and isinstance(insights, dict):
-                        recipe_title = matching_recipe.get("title", "Dashboard trước đây")
-                        insights["summary"] += f"\n\n💡 **Gợi ý Ký ức**: Tôi nhận thấy bạn từng dựng mẫu Dashboard *'{recipe_title}'* cho file có cùng cấu trúc này. Bạn có thể bấm **Tạo Dashboard** để tái sử dụng ngay!"
-                        insights["matched_recipe"] = {
-                            "id": matching_recipe.get("id"),
-                            "title": recipe_title,
-                        }
+                    try:
+                        past_recipes = graph.query_recipes_by_fingerprint(user_id, active_fp)
+                        if past_recipes:
+                            recipe = past_recipes[0]
+                            kpi_count = len(recipe.get("kpis") or [])
+                            chart_count = len(recipe.get("charts") or [])
+                            step(f"💡 Nhận diện cấu trúc quen thuộc! Bạn từng xây Dashboard ({kpi_count} KPI, {chart_count} biểu đồ) với cấu trúc dữ liệu này.")
+                    except Exception as exc:
+                        print(f"[upload] recipe recall failed: {exc}")
 
                 graph.log_action(
                     user_id, "upload",
@@ -400,7 +402,11 @@ async def upload(request: Request, files: list[UploadFile]):
         threading.Thread(target=worker, daemon=True).start()
 
         while True:
-            event = await anyio.to_thread.run_sync(q.get)
+            try:
+                event = await anyio.to_thread.run_sync(lambda: q.get(timeout=2.5))
+            except queue.Empty:
+                yield ndjson_line({"type": "ping"})
+                continue
             if event is SENTINEL:
                 break
             yield ndjson_line(event)
