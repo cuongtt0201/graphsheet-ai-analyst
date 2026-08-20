@@ -14,6 +14,8 @@ import {
   type DashboardFilters,
   type SavedReport,
   type TableResult,
+  type UserMemories,
+  type SheetCopilotResult,
 } from "../api";
 import type { GridSheet } from "./UniverGrid";
 import Tour, { type TourStep } from "./Tour";
@@ -748,6 +750,14 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
 
   const [tables, setTables] = useState<FileProfile[]>([]);
   const [gridCache, setGridCache] = useState<Record<string, (string | number)[][]>>({});
+  // Sheet Copilot: prompt, in-flight flag, and the last verified result so the
+  // formula stays on screen after the grid updates.
+  const [copilotPrompt, setCopilotPrompt] = useState("");
+  const [copilotBusy, setCopilotBusy] = useState(false);
+  const [copilotResult, setCopilotResult] = useState<SheetCopilotResult | null>(null);
+  // Univer rebuilds on signature change; an edit that only rewrites values
+  // leaves rows and columns identical, so the parent bumps this instead.
+  const [gridRevision, setGridRevision] = useState(0);
   const [resultSheets, setResultSheets] = useState<ResultSheet[]>([]);
   const [activeKey, setActiveKey] = useState<string>("");
   const [loadingSheet, setLoadingSheet] = useState(false);
@@ -763,6 +773,11 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
     behaviors?: any[];
   } | null>(null);
   const [loadingMemory, setLoadingMemory] = useState(false);
+  // The diagnostics endpoint returns a graph for drawing; this returns the same
+  // knowledge as an editable list with ids, which is what deletion needs.
+  const [userMemories, setUserMemories] = useState<UserMemories | null>(null);
+  const [forgetQuery, setForgetQuery] = useState("");
+  const [forgetBusy, setForgetBusy] = useState(false);
 
   const handleForgetBehaviors = async () => {
     if (!window.confirm("Xóa toàn bộ ghi nhớ về thói quen của bạn? AI sẽ học lại từ đầu.")) return;
@@ -771,6 +786,70 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
       fetchMemoryDiagnostics();
     } catch (e) {
       alert(`Không thể xóa: ${(e as Error).message}`);
+    }
+  };
+
+  const handleDeleteMemory = async (memoryId: string, label: string) => {
+    if (!window.confirm(`Xóa ghi nhớ này?
+
+"${label}"`)) return;
+    try {
+      await api.memoryDelete(memoryId);
+      fetchMemoryDiagnostics();
+    } catch (e) {
+      alert(`Không thể xóa: ${(e as Error).message}`);
+    }
+  };
+
+  const handleForgetByText = async () => {
+    const query = forgetQuery.trim();
+    if (!query) return;
+    setForgetBusy(true);
+    try {
+      const res = await api.memoryForget(query);
+      const n = res.deleted_items?.length ?? 0;
+      // Say nothing was matched rather than letting silence read as success.
+      alert(n === 0 ? `Không tìm thấy ghi nhớ nào khớp với "${query}".` : `Đã quên ${n} ghi nhớ.`);
+      setForgetQuery("");
+      fetchMemoryDiagnostics();
+    } catch (e) {
+      alert(`Không thể quên: ${(e as Error).message}`);
+    } finally {
+      setForgetBusy(false);
+    }
+  };
+
+  const handleClearAllMemory = async () => {
+    if (!window.confirm("Xóa sạch MỌI ghi nhớ (quy ước nghiệp vụ + thói quen)? Không thể hoàn tác.")) return;
+    try {
+      const res = await api.memoryClear();
+      alert(`Đã xóa ${res.deleted_count} ghi nhớ.`);
+      fetchMemoryDiagnostics();
+    } catch (e) {
+      alert(`Không thể xóa: ${(e as Error).message}`);
+    }
+  };
+
+  const handleRunCopilot = async () => {
+    const prompt = copilotPrompt.trim();
+    if (!prompt || !activeKey || activeKey === "dashboard") return;
+    setCopilotBusy(true);
+    setCopilotResult(null);
+    try {
+      const res = await api.sheetCopilot(prompt, activeKey);
+      setCopilotResult(res);
+      // The backend only answers ok:true after running the code in the sandbox,
+      // and refuses rather than returning a partial grid - so anything that
+      // arrives here is safe to put on screen whole.
+      if (res.ok && res.grid) {
+        setGridCache((prev) => ({ ...prev, [activeKey]: res.grid! }));
+        setGridRevision((n) => n + 1);
+        setCopilotPrompt("");
+      }
+    } catch (e) {
+      setCopilotResult({ ok: false, error: (e as Error).message });
+    } finally {
+      setCopilotBusy(false);
     }
   };
 
@@ -791,10 +870,13 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
   const fetchMemoryDiagnostics = async () => {
     setLoadingMemory(true);
     try {
-      const data = await api.diagnosticsMemory();
-      setMemoryData(data);
-    } catch (e) {
-      console.error("Failed to load memory diagnostics:", e);
+      // Settled, not all: Neo4j being off must not blank the whole panel, and
+      // one endpoint failing should not hide what the other returned.
+      const [diag, mem] = await Promise.allSettled([api.diagnosticsMemory(), api.memoryAll()]);
+      if (diag.status === "fulfilled") setMemoryData(diag.value);
+      else console.error("Failed to load memory diagnostics:", diag.reason);
+      if (mem.status === "fulfilled") setUserMemories(mem.value.memories);
+      else console.error("Failed to load memory list:", mem.reason);
     } finally {
       setLoadingMemory(false);
     }
@@ -1800,10 +1882,74 @@ function isExecutiveReportRequest(query: string): boolean {
                   {(b.usage_count ?? 0) > 0 && (
                     <span className="behavior-usage">dùng {b.usage_count} lần</span>
                   )}
+                  <button
+                    className="memory-item__delete"
+                    title="Quên riêng ghi nhớ này"
+                    onClick={() => handleDeleteMemory(b.id, b.description)}
+                  >
+                    ×
+                  </button>
                 </div>
               ))}
             </div>
           )}
+
+          <div className="sidebar-section-title" style={{ marginTop: "1rem" }}>
+            Quy ước nghiệp vụ ({userMemories?.business_rules?.length ?? 0})
+          </div>
+          {(userMemories?.business_rules?.length ?? 0) === 0 ? (
+            <div style={{ color: "#8b949e", fontSize: "0.82rem", marginBottom: "1rem" }}>
+              Chưa có quy ước nào. Cứ nói tự nhiên trong khung chat — ví dụ “bên tôi doanh thu
+              thuần là doanh thu trừ chiết khấu” — AI sẽ ghi nhớ và áp dụng cho các lần sau.
+            </div>
+          ) : (
+            <div className="behaviors-list">
+              {(userMemories?.business_rules ?? []).map((r) => (
+                <div key={r.id} className="behavior-card">
+                  <span className="behavior-category behavior-category--preference">Quy ước</span>
+                  <span className="behavior-desc">
+                    <strong>{r.concept_name}</strong> — {r.formula_desc}
+                  </span>
+                  {(r.target_columns?.length ?? 0) > 0 && (
+                    <span className="behavior-usage">{r.target_columns!.join(", ")}</span>
+                  )}
+                  <button
+                    className="memory-item__delete"
+                    title="Quên riêng quy ước này"
+                    onClick={() => handleDeleteMemory(r.id, r.concept_name)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="memory-forget">
+            <input
+              className="memory-forget__input"
+              placeholder="Quên giúp tôi chuyện… (vd: chiết khấu)"
+              value={forgetQuery}
+              onChange={(e) => setForgetQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleForgetByText();
+              }}
+            />
+            <button
+              className="button button--small button--secondary"
+              disabled={forgetBusy || !forgetQuery.trim()}
+              onClick={handleForgetByText}
+            >
+              {forgetBusy ? "Đang quên…" : "Quên"}
+            </button>
+            <button
+              className="button button--small button--secondary"
+              onClick={handleClearAllMemory}
+              title="Xóa mọi quy ước và thói quen"
+            >
+              Xóa sạch
+            </button>
+          </div>
 
           <div className="sidebar-section-title" style={{ marginTop: "1rem" }}>Kỹ năng tác vụ ({memoryData?.skills.length ?? 0})</div>
           <div className="skills-list skills-list--grid">
@@ -1956,6 +2102,68 @@ function isExecutiveReportRequest(query: string): boolean {
                   >
                     📊 Kéo thả biểu đồ (BI)
                   </button>
+                </div>
+              )}
+
+              {activeKey !== "dashboard" && activeSheet && viewMode === "grid" && (
+                <div className="copilot-bar">
+                  <input
+                    className="copilot-bar__input"
+                    placeholder="🧮 Bảo AI sửa bảng tính… (vd: thêm cột lợi nhuận = doanh thu - chi phí)"
+                    value={copilotPrompt}
+                    disabled={copilotBusy}
+                    onChange={(e) => setCopilotPrompt(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleRunCopilot();
+                    }}
+                  />
+                  <button
+                    className="button button--small button--primary"
+                    disabled={copilotBusy || !copilotPrompt.trim()}
+                    onClick={handleRunCopilot}
+                  >
+                    {copilotBusy ? "Đang kiểm thử…" : "Chạy"}
+                  </button>
+                  {copilotResult && (
+                    <button
+                      className="button button--small button--secondary"
+                      onClick={() => setCopilotResult(null)}
+                      title="Ẩn kết quả"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {activeKey !== "dashboard" && viewMode === "grid" && copilotResult && (
+                <div className={`copilot-result${copilotResult.ok ? "" : " copilot-result--error"}`}>
+                  {copilotResult.ok ? (
+                    <>
+                      <span className="copilot-result__badge">✅ Đã kiểm thử trong sandbox</span>
+                      {copilotResult.excel_formula && (
+                        <code className="copilot-result__formula">{copilotResult.excel_formula}</code>
+                      )}
+                      <span className="copilot-result__text">{copilotResult.explanation}</span>
+                      {/* The sheet on screen always updates; whether the change also
+                          reached the analysis data is a different fact, and saying so
+                          is the difference between "AI knows about the new column" and
+                          "it only looks like it does". */}
+                      <span className="copilot-result__text">
+                        {copilotResult.persisted
+                          ? `Đã áp lên ${copilotResult.total_rows?.toLocaleString("vi-VN")} dòng — chat và biểu đồ dùng được cột mới.`
+                          : "Chỉ hiển thị trên bảng: kết quả đổi cấu trúc bảng nên chưa ghi vào dữ liệu phân tích."}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="copilot-result__badge">⛔ Đã hủy</span>
+                      <span className="copilot-result__text">{copilotResult.error}</span>
+                      {copilotResult.explanation && (
+                        <span className="copilot-result__text">{copilotResult.explanation}</span>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
 
@@ -2291,7 +2499,7 @@ function isExecutiveReportRequest(query: string): boolean {
                 <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
                   <ViewErrorBoundary>
                     <React.Suspense fallback={<div className="chat-empty" style={{ flex: 1 }}><p>Đang nạp bảng tính…</p></div>}>
-                      <UniverGrid sheet={activeSheet} />
+                      <UniverGrid sheet={activeSheet} revision={gridRevision} />
                     </React.Suspense>
                   </ViewErrorBoundary>
                 </div>

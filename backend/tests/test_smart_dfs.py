@@ -46,3 +46,21 @@ def test_smart_dataframe_missing_key_error():
         _ = smart["non_existent"]
     
     assert "không tồn tại" in str(exc_info.value)
+
+
+def test_run_pandas_max_rows_lifts_the_default_cap():
+    """The sheet copilot needs every row; the default 200 stays for everyone else."""
+    import pandas as pd
+    from app.agent import sandbox
+
+    df = pd.DataFrame({"n": range(500)})
+    code = "result = df.assign(double=df['n'] * 2)"
+
+    capped = sandbox.run_pandas(code, {"T": df})
+    assert len(capped["result"]["rows"]) == sandbox.MAX_RESULT_ROWS
+    assert capped["result"]["truncated"] is True
+
+    full = sandbox.run_pandas(code, {"T": df}, max_rows=10_000)
+    assert len(full["result"]["rows"]) == 500
+    assert full["result"]["truncated"] is False
+    assert full["result"]["total_rows"] == 500

@@ -16,6 +16,54 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json();
 }
 
+export interface MemoryBehavior {
+  id: string;
+  description: string;
+  category?: string;
+  weight?: number;
+  usage_count?: number;
+  success_count?: number;
+  updated_at?: number;
+}
+
+export interface MemoryBusinessRule {
+  id: string;
+  concept_name: string;
+  formula_desc: string;
+  target_columns?: string[];
+  weight?: number;
+  updated_at?: number;
+}
+
+export interface MemoryRecipe {
+  id: string;
+  title: string;
+  updated_at?: number;
+}
+
+export interface UserMemories {
+  behaviors: MemoryBehavior[];
+  business_rules: MemoryBusinessRule[];
+  recipes: MemoryRecipe[];
+}
+
+export interface SheetCopilotResult {
+  ok: boolean;
+  applied?: boolean;
+  error?: string;
+  explanation?: string;
+  mutation_type?: string;
+  target_column?: string;
+  excel_formula?: string;
+  verified_in_sandbox?: boolean;
+  /** Full sheet including the header row; absent when the result was rejected. */
+  grid?: (string | number)[][];
+  total_rows?: number;
+  /** True when the backend also wrote the result into the session, so chat and
+   * charts see the new column too. */
+  persisted?: boolean;
+}
+
 export interface FileProfile {
   source_id: string;
   filename: string;
@@ -547,6 +595,40 @@ export const api = {
 
   deleteBehaviors: () =>
     request<{ deleted: number }>("/api/diagnostics/behaviors", { method: "DELETE" }),
+
+  /** Every business rule and habit the graph holds for this user, as a flat
+   * list with ids -- the diagnostics endpoint above returns a graph for
+   * drawing and can only delete behaviours wholesale. */
+  memoryAll: () => request<{ ok: boolean; memories: UserMemories }>("/api/agent/memory/all"),
+
+  /** Drop one remembered item by id. */
+  memoryDelete: (memory_id: string) =>
+    request<{ ok: boolean }>("/api/agent/memory/delete", {
+      method: "POST",
+      body: JSON.stringify({ memory_id }),
+    }),
+
+  /** "Quên chuyện chiết khấu đi" -- erase by description rather than by id. */
+  memoryForget: (query: string) =>
+    request<{ ok: boolean; deleted_items: string[] }>("/api/agent/memory/forget", {
+      method: "POST",
+      body: JSON.stringify({ query }),
+    }),
+
+  memoryClear: () =>
+    request<{ ok: boolean; deleted_count: number }>("/api/agent/memory/clear", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+
+  /** Ask the copilot for a sheet edit. The backend verifies the generated code
+   * in the sandbox before it answers, so a result with ok:true is already
+   * proven to run; `grid` is the full sheet, never a truncated sample. */
+  sheetCopilot: (prompt: string, source_id: string | null) =>
+    request<SheetCopilotResult>("/api/agent/sheet/copilot", {
+      method: "POST",
+      body: JSON.stringify({ prompt, source_id }),
+    }),
 
   /** Re-parse one sheet using a user-chosen header row (0-based into the raw grid). */
   reparse: (source_id: string, header_row: number) =>

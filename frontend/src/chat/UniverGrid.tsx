@@ -89,9 +89,22 @@ function gridToSheet(id: string, name: string, grid: (string | number)[][]) {
  * so the payload is always one sheet at a time regardless of how many sheets a
  * file has. We recreate the instance when the shown sheet changes - simple and
  * correct; a single sheet is cheap to build. */
-export default function UniverGrid({ sheet }: { sheet: GridSheet | null }) {
+export default function UniverGrid({
+  sheet,
+  revision = 0,
+}: {
+  sheet: GridSheet | null;
+  /** Bump to force a rebuild when the grid changed in a way the signature
+   * below cannot see -- a copilot edit that rewrites cell values in place. */
+  revision?: number;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const signature = sheet ? `${sheet.name}:${sheet.grid.length}` : "empty";
+  // Column count belongs in the signature: adding a column leaves the row count
+  // untouched, so a rows-only signature left the new column invisible until the
+  // user switched tabs and back.
+  const signature = sheet
+    ? `${sheet.name}:${sheet.grid.length}x${sheet.grid[0]?.length ?? 0}:${revision}`
+    : "empty";
 
   useEffect(() => {
     if (!containerRef.current) return;

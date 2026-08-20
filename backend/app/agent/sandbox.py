@@ -314,6 +314,11 @@ try:
     with open("/workspace/config.json", "r", encoding="utf-8") as f:
         config = json.load(f)
     result_var = config.get("result_var", "result")
+    # The caller may lift the row cap (sheet copilot needs the whole computed
+    # column, not a 200-row sample it would silently write into a live sheet).
+    _cap = config.get("max_rows")
+    if _cap:
+        MAX_RESULT_ROWS = int(_cap)
 
     with open("/workspace/mappings.json", "r", encoding="utf-8") as f:
         mappings = json.load(f)
@@ -388,6 +393,7 @@ def _run_in_container(
     result_var: str = "result",
     helper_source: str = "",
     timeout: float = CHAT_TIMEOUT_S,
+    max_rows: int | None = None,
 ) -> dict | None:
     """Run code in an isolated sibling container. Returns None if Docker/the
     sandbox image is unavailable (caller falls back to local execution)."""
@@ -417,7 +423,7 @@ def _run_in_container(
         with open(os.path.join(local_run_dir, "mappings.json"), "w", encoding="utf-8") as f:
             json.dump(df_mappings, f, ensure_ascii=False)
         with open(os.path.join(local_run_dir, "config.json"), "w", encoding="utf-8") as f:
-            json.dump({"result_var": result_var}, f)
+            json.dump({"result_var": result_var, "max_rows": max_rows}, f)
         with open(os.path.join(local_run_dir, "code.txt"), "w", encoding="utf-8") as f:
             f.write(code)
         if helper_source:
@@ -582,7 +588,8 @@ def _run_local(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def run_pandas(code: str, dataframes: dict[str, pd.DataFrame],
-               skills_env: dict | None = None, skills_source: str = "") -> dict:
+               skills_env: dict | None = None, skills_source: str = "",
+               max_rows: int | None = None) -> dict:
     """Chat-agent snippets: `code` must assign to `result`.
 
     In scope: df (first table), dfs (all tables), pd, np, plus any curated /
@@ -608,7 +615,8 @@ def run_pandas(code: str, dataframes: dict[str, pd.DataFrame],
     except UnsafeCodeError as exc:
         return {"ok": False, "error": str(exc)}
 
-    container_res = _run_in_container(code, dataframes, helper_source=skills_source, timeout=CHAT_TIMEOUT_S)
+    container_res = _run_in_container(code, dataframes, helper_source=skills_source,
+                                      timeout=CHAT_TIMEOUT_S, max_rows=max_rows)
     if container_res is not None:
         if container_res["ok"]:
             return {"ok": True, "kind": container_res["kind"], "result": container_res["result"],
@@ -632,7 +640,7 @@ def run_pandas(code: str, dataframes: dict[str, pd.DataFrame],
     )
     if error is not None:
         return {"ok": False, "error": error}
-    return {"ok": True, **_serialize(value), **_join_verdict()}
+    return {"ok": True, **_serialize(value, max_rows), **_join_verdict()}
 
 
 def _join_verdict() -> dict:
@@ -729,12 +737,13 @@ def run_datagen(code: str) -> dict:
     return {"ok": True, "dataframes": value}
 
 
-def _serialize(value) -> dict:
+def _serialize(value, max_rows: int | None = None) -> dict:
     """Turn a pandas/numpy/python result into JSON the model + UI can read,
-    capped at MAX_RESULT_ROWS."""
+    capped at `max_rows` (default MAX_RESULT_ROWS)."""
+    cap = int(max_rows) if max_rows else MAX_RESULT_ROWS
     if isinstance(value, pd.DataFrame):
-        truncated = len(value) > MAX_RESULT_ROWS
-        head = value.head(MAX_RESULT_ROWS).copy()
+        truncated = len(value) > cap
+        head = value.head(cap).copy()
         for col in head.columns:
             if pd.api.types.is_datetime64_any_dtype(head[col]):
                 head[col] = head[col].astype(str)
@@ -748,7 +757,7 @@ def _serialize(value) -> dict:
             },
         }
     if isinstance(value, pd.Series):
-        return _serialize(value.reset_index())
+        return _serialize(value.reset_index(), max_rows)
     if isinstance(value, (np.integer, np.floating)):
         return {"kind": "scalar", "result": value.item()}
     if isinstance(value, (int, float, str, bool)):

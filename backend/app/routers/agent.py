@@ -450,16 +450,63 @@ def mutate_sheet_via_copilot(request: Request, body: dict):
     state = get_state(request)
     dfs = state.get("dataframes") or {}
     profiles = state.get("profiles") or []
-    
+
     from app.agent.chat_agent import _schema_text
     from app.agent.sheet_copilot import apply_sheet_copilot_mutation
-    
+
+    source_id = body.get("source_id") or body.get("sheet_id")
     schema_context = _schema_text(profiles, dfs)
     result = apply_sheet_copilot_mutation(
         user_prompt=prompt,
         dataframes=dfs,
         schema_context=schema_context,
-        sheet_id=body.get("sheet_id"),
+        sheet_id=source_id,
     )
+    if not result.get("ok"):
+        return result
+
+    result["persisted"] = _persist_copilot_result(state, source_id, result.get("grid"))
     return result
+
+
+def _persist_copilot_result(state: dict, source_id: str | None, grid: list | None) -> bool:
+    """Write a verified copilot grid back into session state.
+
+    Only an edit that keeps the sheet's shape is persisted: same row count, and
+    every original column still present. An aggregation or a filter would
+    overwrite the source table with a summary of itself, which is data loss the
+    user never asked for -- those are returned for display only.
+    """
+    if not source_id or not grid or len(grid) < 1:
+        return False
+
+    dfs = state.get("dataframes") or {}
+    source_df = dfs.get(source_id)
+    if source_df is None:
+        return False
+
+    header, *rows = grid
+    if len(rows) != len(source_df):
+        return False
+    if not set(str(c) for c in source_df.columns).issubset({str(c) for c in header}):
+        return False
+
+    import pandas as pd
+
+    new_df = pd.DataFrame(rows, columns=[str(c) for c in header])
+    # The grid crossed as JSON, so numbers arrived as strings; recover the
+    # dtypes the analysis path depends on without touching identifier columns.
+    from app.data.smart_cleaner import clean_dataframe_silently
+    new_df = clean_dataframe_silently(new_df)
+
+    state["dataframes"] = {**dfs, source_id: new_df}
+
+    raw_grids = dict(state.get("raw_grids") or {})
+    if source_id in raw_grids:
+        raw_grids[source_id] = {**raw_grids[source_id], "grid": grid}
+        state["raw_grids"] = raw_grids
+
+    # A merged view built from the old columns is now stale.
+    state.pop("cleaned_df", None)
+    return True
 

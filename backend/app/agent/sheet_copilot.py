@@ -110,6 +110,26 @@ def verify_excel_formula_column_mapping(excel_formula: str, dataframes: dict[str
 
 
 
+# A copilot mutation is written into the user's live sheet, so the verification
+# run has to return every row -- the default 200-row sample would land as a
+# silently truncated sheet. The ceiling exists so one absurd file cannot turn a
+# result into a hundred-megabyte JSON response; past it we refuse to apply
+# rather than apply a partial column.
+APPLY_MAX_ROWS = 50_000
+
+
+def _result_to_grid(table: dict[str, Any] | None) -> list[list[Any]] | None:
+    """Flatten a sandbox table result into the [[header...], [row...]] grid
+    UniverGrid renders. Returns None when the result is not a table."""
+    if not isinstance(table, dict):
+        return None
+    columns = table.get("columns")
+    rows = table.get("rows")
+    if not isinstance(columns, list) or not isinstance(rows, list):
+        return None
+    return [[str(c) for c in columns]] + [list(r) for r in rows]
+
+
 def apply_sheet_copilot_mutation(
     user_prompt: str,
     dataframes: dict[str, pd.DataFrame],
@@ -137,7 +157,7 @@ def apply_sheet_copilot_mutation(
 
     # PRE-FLIGHT SANDBOX VERIFICATION
     _emit({"type": "step", "message": "🧪 Đang kiểm thử công thức trong Sandbox an toàn..."})
-    test_run = run_pandas_fn(py_code, dataframes)
+    test_run = run_pandas_fn(py_code, dataframes, max_rows=APPLY_MAX_ROWS)
 
     if not test_run.get("ok"):
         # Pre-flight failed -> Retry once with error feedback
@@ -158,7 +178,7 @@ Hãy sửa lại công thức Excel và mã kiểm thử Python để chạy th�
             py_code = plan.get("python_verification_code", "")
             excel_formula = plan.get("excel_formula", "")
             explanation = plan.get("explanation", "")
-            test_run = run_pandas_fn(py_code, dataframes)
+            test_run = run_pandas_fn(py_code, dataframes, max_rows=APPLY_MAX_ROWS)
         except Exception:
             pass
 
@@ -180,10 +200,32 @@ Hãy sửa lại công thức Excel và mã kiểm thử Python để chạy th�
             "explanation": "Công thức Excel tham chiếu ô vượt quá giới hạn số cột thực tế của bảng.",
         }
 
+    # A partial grid must never reach a live sheet: applying it would delete
+    # every row past the cap while looking like a successful edit.
+    table = test_run.get("result")
+    if isinstance(table, dict) and table.get("truncated"):
+        return {
+            "ok": False,
+            "applied": False,
+            "error": (
+                f"Kết quả có {table.get('total_rows', 0):,} dòng, vượt giới hạn "
+                f"{APPLY_MAX_ROWS:,} dòng của thao tác này."
+            ),
+            "explanation": "Đã hủy để không ghi đè bảng tính bằng dữ liệu thiếu dòng.",
+        }
+
+    grid = _result_to_grid(table)
+    if grid is None:
+        return {
+            "ok": False,
+            "applied": False,
+            "error": "Mã kiểm thử không trả về bảng dữ liệu nên không thể áp lên bảng tính.",
+            "explanation": "Đã hủy thao tác để bảo vệ tính toàn vẹn của bảng tính người dùng.",
+        }
+
     # Sandbox & Mapping Verification Succeeded!
     _emit({"type": "step", "message": f"✅ Công thức và tham chiếu ô ({mapping_msg}) đã xác thực 100%!"})
 
-    
     return {
         "ok": True,
         "applied": True,
@@ -193,5 +235,7 @@ Hãy sửa lại công thức Excel và mã kiểm thử Python để chạy th�
         "conditional_format_rule": cond_rule,
         "explanation": explanation,
         "verified_in_sandbox": True,
-        "preview": test_run.get("result"),
+        "grid": grid,
+        "total_rows": int(table.get("total_rows") or max(len(grid) - 1, 0)),
+        "preview": table,
     }
