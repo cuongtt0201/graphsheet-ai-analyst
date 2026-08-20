@@ -842,8 +842,21 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
       // and refuses rather than returning a partial grid - so anything that
       // arrives here is safe to put on screen whole.
       if (res.ok && res.grid) {
-        setGridCache((prev) => ({ ...prev, [activeKey]: res.grid! }));
-        setGridRevision((n) => n + 1);
+        if (res.target === "new_sheet") {
+          // A total belongs in its own tab. Pasting it over the source sheet is
+          // what produced a column of 113 repeated down 113 rows.
+          const [header, ...rows] = res.grid;
+          const key = `result:${Date.now()}`;
+          const name = res.sheet_title?.trim() || `Tổng hợp ${resultSheets.length + 1}`;
+          setResultSheets((prev) => [
+            { key, name, table: { columns: header.map(String), rows, total_rows: rows.length, truncated: false } },
+            ...prev,
+          ]);
+          setActiveKey(key);
+        } else {
+          setGridCache((prev) => ({ ...prev, [activeKey]: res.grid! }));
+          setGridRevision((n) => n + 1);
+        }
         setCopilotPrompt("");
       }
     } catch (e) {
@@ -2150,7 +2163,9 @@ function isExecutiveReportRequest(query: string): boolean {
                           is the difference between "AI knows about the new column" and
                           "it only looks like it does". */}
                       <span className="copilot-result__text">
-                        {copilotResult.persisted
+                        {copilotResult.target === "new_sheet"
+                          ? "Đã mở thành sheet riêng — bảng gốc giữ nguyên."
+                          : copilotResult.persisted
                           ? `Đã áp lên ${copilotResult.total_rows?.toLocaleString("vi-VN")} dòng — chat và biểu đồ dùng được cột mới.`
                           : "Chỉ hiển thị trên bảng: kết quả đổi cấu trúc bảng nên chưa ghi vào dữ liệu phân tích."}
                       </span>

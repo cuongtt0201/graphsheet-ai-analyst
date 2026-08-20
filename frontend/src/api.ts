@@ -56,6 +56,10 @@ export interface SheetCopilotResult {
   target_column?: string;
   excel_formula?: string;
   verified_in_sandbox?: boolean;
+  /** "sheet" edits the table in place; "new_sheet" is a summary that opens as
+   * its own tab, because a total is not a per-row value. */
+  target?: "sheet" | "new_sheet";
+  sheet_title?: string | null;
   /** Full sheet including the header row; absent when the result was rejected. */
   grid?: (string | number)[][];
   total_rows?: number;

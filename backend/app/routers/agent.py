@@ -465,7 +465,12 @@ def mutate_sheet_via_copilot(request: Request, body: dict):
     if not result.get("ok"):
         return result
 
-    result["persisted"] = _persist_copilot_result(state, source_id, result.get("grid"))
+    # A summary opens as its own sheet; writing it back would replace the source
+    # table with a one-row count of itself.
+    if result.get("target") == "new_sheet":
+        result["persisted"] = False
+    else:
+        result["persisted"] = _persist_copilot_result(state, source_id, result.get("grid"))
     return result
 
 

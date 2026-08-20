@@ -22,7 +22,7 @@ _COPILOT_SCHEMA = {
     "properties": {
         "mutation_type": {
             "type": "string",
-            "enum": ["add_column_formula", "conditional_formatting", "create_sheet", "transform"],
+            "enum": ["add_column_formula", "summary", "conditional_formatting"],
         },
         "target_column": {"type": "string", "description": "Tên cột mới hoặc cột cần áp dụng"},
         "excel_formula": {"type": "string", "description": "Công thức Excel chuẩn cho UniverGrid, vd: '=C2-D2' hoặc '=IF(B2>0, C2/B2, 0)'"},
@@ -53,12 +53,32 @@ YÊU CẦU CỦA NGƯỜI DÙNG:
 "{user_prompt}"
 
 YÊU CẦU:
-1. Xác định `mutation_type`:
-   - "add_column_formula": Thêm cột mới có công thức Excel động (vd: tính % tăng trưởng, lợi nhuận, chiết khấu).
-   - "conditional_formatting": Tô màu có điều kiện (vd: highlight các dòng lỗ, các số > 100tr).
-   - "create_sheet": Tạo tab sheet mới từ dữ liệu đã lọc/nhóm.
-2. `excel_formula`: Viết công thức Excel chuẩn bắt đầu bằng dấu `=`, tham chiếu các ô tương ứng dòng 2 (vd: `=C2-D2`).
-3. `python_verification_code`: Viết mã Python tương đương gán DataFrame mới vào biến `result` để chạy kiểm thử trong Sandbox TRƯỚC KHI áp dụng lên bảng tính thật.
+1. Xác định `mutation_type` — câu hỏi quyết định là: **kết quả có một giá trị RIÊNG cho từng dòng không?**
+
+   - "add_column_formula" — CHỈ khi mỗi dòng có một giá trị khác nhau, tính từ chính
+     các ô của dòng đó. Vd: `Lợi nhuận = Doanh thu - Chi phí`, `% hoàn thành = TH / KH`.
+
+   - "summary" — khi câu trả lời là MỘT con số, hoặc một bảng tổng hợp/đếm/nhóm.
+     Vd: "đếm tổng số chương trình", "doanh thu theo miền", "top 10 cửa hàng".
+     Kết quả sẽ mở ra thành một SHEET MỚI, không dán đè lên bảng gốc.
+
+   - "conditional_formatting" — tô màu theo điều kiện.
+
+   TUYỆT ĐỐI CẤM: lấy một con số tổng hợp rồi lặp lại nó xuống mọi dòng của một cột
+   mới (kiểu `df.assign(Tổng=len(df))` cho ra 113 ở cả 113 dòng). Đó là rác, không
+   phải câu trả lời. Gặp trường hợp này thì dùng "summary".
+
+2. `excel_formula`: Công thức Excel bắt đầu bằng `=`, tham chiếu ô ở dòng 2 (vd `=C2-D2`).
+   Với "summary" thì đây là công thức tổng hợp (vd `=COUNTA(A:A)-1`) chỉ để người dùng
+   tham khảo, không dán vào bảng.
+
+3. `python_verification_code`: Mã Python gán vào biến `result`:
+   - "add_column_formula": `result` = TOÀN BỘ DataFrame gốc kèm cột mới
+     (vd `result = df.assign(**{{"Lợi nhuận": df["Doanh thu"] - df["Chi phí"]}})`).
+   - "summary": `result` = DataFrame tổng hợp GỌN, chỉ gồm dòng/cột cần thiết
+     (vd `result = df.groupby("Miền", as_index=False)["Doanh thu"].sum()`).
+     Nếu chỉ là một con số thì gói thành bảng 1 dòng có tên cột rõ nghĩa
+     (vd `result = pd.DataFrame({{"Tổng số chương trình": [len(df)]}})`).
 
 Trả về DUY NHẤT JSON đúng schema."""
 
@@ -116,6 +136,46 @@ def verify_excel_formula_column_mapping(excel_formula: str, dataframes: dict[str
 # result into a hundred-megabyte JSON response; past it we refuse to apply
 # rather than apply a partial column.
 APPLY_MAX_ROWS = 50_000
+
+
+def _broadcast_columns(
+    table: dict[str, Any], source_df: pd.DataFrame | None
+) -> list[str]:
+    """Columns the model added that hold the SAME value on every row.
+
+    This is the failure that made the feature look broken: asked to "đếm tổng số
+    chương trình", the model wrote `df.assign(Tổng=len(df))` and 113 appeared in
+    all 113 rows. It answers the question and ruins the sheet at the same time.
+    A per-row column that never varies is not a per-row column, so the result is
+    re-routed to a summary sheet instead of being pasted over the data.
+    """
+    rows = table.get("rows") or []
+    columns = [str(c) for c in (table.get("columns") or [])]
+    if source_df is None or len(rows) < 3:
+        return []
+
+    existing = {str(c) for c in source_df.columns}
+    added = [(i, c) for i, c in enumerate(columns) if c not in existing]
+    constant = []
+    for idx, name in added:
+        values = {str(r[idx]) for r in rows if idx < len(r)}
+        if len(values) == 1:
+            constant.append(name)
+    return constant
+
+
+def _summary_from_broadcast(table: dict[str, Any], names: list[str]) -> dict[str, Any]:
+    """Collapse repeated constants into the one-row table they always were."""
+    columns = [str(c) for c in (table.get("columns") or [])]
+    rows = table.get("rows") or []
+    first = rows[0]
+    picked = [(c, first[columns.index(c)]) for c in names if columns.index(c) < len(first)]
+    return {
+        "columns": [c for c, _ in picked],
+        "rows": [[v for _, v in picked]],
+        "total_rows": 1,
+        "truncated": False,
+    }
 
 
 def _result_to_grid(table: dict[str, Any] | None) -> list[list[Any]] | None:
@@ -214,6 +274,27 @@ Hãy sửa lại công thức Excel và mã kiểm thử Python để chạy th�
             "explanation": "Đã hủy để không ghi đè bảng tính bằng dữ liệu thiếu dòng.",
         }
 
+    # Route the result: a per-row edit lands on the sheet, anything that answers
+    # with a single number or a grouped total opens as its own sheet.
+    source_df = None
+    if sheet_id and sheet_id in dataframes:
+        source_df = dataframes[sheet_id]
+    elif dataframes:
+        source_df = next(iter(dataframes.values()))
+
+    target = "new_sheet" if mutation_type == "summary" else "sheet"
+    demoted: list[str] = []
+    if target == "sheet" and isinstance(table, dict):
+        demoted = _broadcast_columns(table, source_df)
+        if demoted:
+            table = _summary_from_broadcast(table, demoted)
+            target = "new_sheet"
+            mutation_type = "summary"
+            explanation = (
+                f"{explanation} Đây là con số chung cho cả bảng chứ không phải giá trị "
+                f"riêng từng dòng, nên mở ra sheet riêng thay vì lặp lại xuống mọi dòng."
+            ).strip()
+
     grid = _result_to_grid(table)
     if grid is None:
         return {
@@ -235,6 +316,8 @@ Hãy sửa lại công thức Excel và mã kiểm thử Python để chạy th�
         "conditional_format_rule": cond_rule,
         "explanation": explanation,
         "verified_in_sandbox": True,
+        "target": target,
+        "sheet_title": target_col if target == "new_sheet" else None,
         "grid": grid,
         "total_rows": int(table.get("total_rows") or max(len(grid) - 1, 0)),
         "preview": table,

@@ -169,3 +169,116 @@ def test_sheet_copilot_refuses_a_non_table_result():
 
     assert res["ok"] is False
     assert "bảng dữ liệu" in res["error"]
+
+
+def test_scalar_broadcast_is_rerouted_to_a_summary_sheet():
+    """"Đếm tổng số chương trình" must not write 113 into all 113 rows.
+
+    The model answers such a question with df.assign(Tổng=len(df)), which is
+    correct arithmetic and a ruined sheet. The constant column is collapsed back
+    into the one-row table it always was, and opens as its own sheet.
+    """
+    df = pd.DataFrame({"CuaHang": [f"CH{i}" for i in range(5)]})
+
+    mock_call_ai = MagicMock(return_value={
+        "mutation_type": "add_column_formula",
+        "target_column": "Tổng số chương trình",
+        "excel_formula": "=COUNTA(A:A)-1",
+        "python_verification_code": "result = df.assign(**{'Tổng số chương trình': len(df)})",
+        "explanation": "Đếm số chương trình",
+    })
+    mock_run_pandas = MagicMock(return_value={
+        "ok": True,
+        "kind": "table",
+        "result": {
+            "columns": ["CuaHang", "Tổng số chương trình"],
+            "rows": [[f"CH{i}", 5] for i in range(5)],
+            "total_rows": 5,
+            "truncated": False,
+        },
+    })
+
+    res = apply_sheet_copilot_mutation(
+        user_prompt="1 cột đếm tổng số chương trình",
+        dataframes={"KM": df},
+        schema_context="KM(CuaHang)",
+        sheet_id="KM",
+        call_ai_fn=mock_call_ai,
+        run_pandas_fn=mock_run_pandas,
+    )
+
+    assert res["ok"] is True
+    assert res["target"] == "new_sheet"
+    assert res["mutation_type"] == "summary"
+    # One row holding the answer, not five rows holding it five times.
+    assert res["grid"] == [["Tổng số chương trình"], [5]]
+
+
+def test_a_real_per_row_column_still_lands_on_the_sheet():
+    """The broadcast guard must not catch a column that genuinely varies."""
+    df = pd.DataFrame({"Revenue": [100, 200, 300, 400], "Cost": [60, 120, 180, 240]})
+
+    mock_call_ai = MagicMock(return_value={
+        "mutation_type": "add_column_formula",
+        "target_column": "Profit",
+        "excel_formula": "=A2-B2",
+        "python_verification_code": "result = df.assign(Profit=df['Revenue'] - df['Cost'])",
+        "explanation": "Doanh thu trừ chi phí",
+    })
+    mock_run_pandas = MagicMock(return_value={
+        "ok": True,
+        "kind": "table",
+        "result": {
+            "columns": ["Revenue", "Cost", "Profit"],
+            "rows": [[100, 60, 40], [200, 120, 80], [300, 180, 120], [400, 240, 160]],
+            "total_rows": 4,
+            "truncated": False,
+        },
+    })
+
+    res = apply_sheet_copilot_mutation(
+        user_prompt="Thêm cột lợi nhuận",
+        dataframes={"Sales": df},
+        schema_context="Sales(Revenue, Cost)",
+        sheet_id="Sales",
+        call_ai_fn=mock_call_ai,
+        run_pandas_fn=mock_run_pandas,
+    )
+
+    assert res["target"] == "sheet"
+    assert len(res["grid"]) == 5
+
+
+def test_summary_mutation_opens_as_its_own_sheet():
+    """A grouped total keeps its own shape and never overwrites the source."""
+    df = pd.DataFrame({"Mien": ["Bac", "Nam", "Bac"], "DoanhThu": [10, 20, 30]})
+
+    mock_call_ai = MagicMock(return_value={
+        "mutation_type": "summary",
+        "target_column": "Doanh thu theo miền",
+        "excel_formula": "=SUMIF(A:A,\"Bac\",B:B)",
+        "python_verification_code": "result = df.groupby('Mien', as_index=False)['DoanhThu'].sum()",
+        "explanation": "Tổng doanh thu theo miền",
+    })
+    mock_run_pandas = MagicMock(return_value={
+        "ok": True,
+        "kind": "table",
+        "result": {
+            "columns": ["Mien", "DoanhThu"],
+            "rows": [["Bac", 40], ["Nam", 20]],
+            "total_rows": 2,
+            "truncated": False,
+        },
+    })
+
+    res = apply_sheet_copilot_mutation(
+        user_prompt="Doanh thu theo miền",
+        dataframes={"Sales": df},
+        schema_context="Sales(Mien, DoanhThu)",
+        sheet_id="Sales",
+        call_ai_fn=mock_call_ai,
+        run_pandas_fn=mock_run_pandas,
+    )
+
+    assert res["target"] == "new_sheet"
+    assert res["grid"] == [["Mien", "DoanhThu"], ["Bac", 40], ["Nam", 20]]
