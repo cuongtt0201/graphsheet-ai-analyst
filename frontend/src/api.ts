@@ -60,6 +60,8 @@ export interface SheetCopilotResult {
    * its own tab, because a total is not a per-row value. */
   target?: "sheet" | "new_sheet";
   sheet_title?: string | null;
+  /** Cells a colour rule selected, in grid coordinates (row 0 is the header). */
+  highlights?: { row: number; col: number; bg?: string; color?: string; bold?: boolean }[];
   /** Full sheet including the header row; absent when the result was rejected. */
   grid?: (string | number)[][];
   total_rows?: number;

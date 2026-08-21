@@ -25,7 +25,9 @@ def test_added_column_is_persisted_into_state():
     # Numbers crossed as JSON strings; the analysis path needs them numeric.
     assert pd.api.types.is_numeric_dtype(df["Profit"])
     assert float(df["Profit"].iloc[0]) == 40.0
-    assert state["raw_grids"]["Sales"]["grid"] == grid
+    # The raw grid is the file as uploaded; a copilot column is not in the file,
+    # and the header-row reparse reads this back.
+    assert state["raw_grids"]["Sales"]["grid"] == [["Revenue", "Cost"], [100, 60], [200, 120]]
     # A merged view built from the old columns must not survive the edit.
     assert "cleaned_df" not in state
 

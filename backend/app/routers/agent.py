@@ -506,12 +506,12 @@ def _persist_copilot_result(state: dict, source_id: str | None, grid: list | Non
 
     state["dataframes"] = {**dfs, source_id: new_df}
 
-    raw_grids = dict(state.get("raw_grids") or {})
-    if source_id in raw_grids:
-        raw_grids[source_id] = {**raw_grids[source_id], "grid": grid}
-        state["raw_grids"] = raw_grids
-
-    # A merged view built from the old columns is now stale.
+    # raw_grids is deliberately left alone. It is defined as the faithful
+    # "what the file actually looks like" view -- no cleaning, no coercion, no
+    # header inference -- and the header-row override reparses against it. A
+    # copilot column is not part of the file, so writing it there would corrupt
+    # the one reference both of those depend on. The edit lives in the analysis
+    # dataframe, which is what chat and charts read.
     state.pop("cleaned_df", None)
     return True
 

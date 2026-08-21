@@ -37,6 +37,11 @@ _COPILOT_SCHEMA = {
                 "threshold": {"type": ["number", "string"]},
                 "color_bg": {"type": "string", "description": "Mã màu hex, vd: '#FEE2E2' cho đỏ nhạt"},
                 "color_text": {"type": "string", "description": "Mã màu hex chữ"},
+                "scope": {
+                    "type": "string",
+                    "enum": ["row", "cell"],
+                    "description": "'row' tô cả dòng (vd 'tô đỏ các dòng lỗ'), 'cell' chỉ tô ô của cột đó",
+                },
             },
         },
         "explanation": {"type": "string", "description": "Giải thích ngắn gọn cho người dùng"},
@@ -178,6 +183,99 @@ def _summary_from_broadcast(table: dict[str, Any], names: list[str]) -> dict[str
     }
 
 
+_DEFAULT_BG = "#FEE2E2"   # đỏ nhạt
+_DEFAULT_FG = "#991B1B"
+
+
+def _numeric(values: list[Any]) -> list[float | None]:
+    """Best-effort numbers out of cells that crossed as JSON strings."""
+    out: list[float | None] = []
+    for v in values:
+        if isinstance(v, bool) or v is None or v == "":
+            out.append(None)
+            continue
+        if isinstance(v, (int, float)):
+            out.append(float(v))
+            continue
+        try:
+            out.append(float(str(v).replace(",", "").replace(" ", "")))
+        except (TypeError, ValueError):
+            out.append(None)
+    return out
+
+
+def _matching_rows(column: list[Any], rule: dict[str, Any]) -> list[int]:
+    """Row indices (0-based into the data rows) the rule selects."""
+    condition = str(rule.get("condition") or "").strip()
+    nums = _numeric(column)
+
+    if condition == "equal_to":
+        # The only condition that is meaningful on text, so compare as written.
+        target = str(rule.get("threshold"))
+        return [i for i, v in enumerate(column) if str(v) == target]
+
+    if condition == "negative":
+        return [i for i, v in enumerate(nums) if v is not None and v < 0]
+
+    if condition == "outlier":
+        present = [v for v in nums if v is not None]
+        # Quartiles from a handful of points are noise, not statistics - the
+        # same floor the data critic uses before it will call anything extreme.
+        if len(present) < 8:
+            return []
+        ordered = sorted(present)
+        q1 = ordered[len(ordered) // 4]
+        q3 = ordered[(3 * len(ordered)) // 4]
+        iqr = q3 - q1
+        if iqr <= 0:
+            return []
+        low, high = q1 - 3.0 * iqr, q3 + 3.0 * iqr
+        return [i for i, v in enumerate(nums) if v is not None and (v < low or v > high)]
+
+    threshold = _numeric([rule.get("threshold")])[0]
+    if threshold is None:
+        return []
+    if condition == "greater_than":
+        return [i for i, v in enumerate(nums) if v is not None and v > threshold]
+    if condition == "less_than":
+        return [i for i, v in enumerate(nums) if v is not None and v < threshold]
+    return []
+
+
+def _compute_highlights(
+    table: dict[str, Any], target_column: str, rule: dict[str, Any] | None
+) -> list[dict[str, Any]]:
+    """Turn a declarative colour rule into the cells the grid should tint.
+
+    Evaluated here rather than in the browser: this is where the values are
+    still typed, and where "âm" and "ngoại lai" already have definitions.
+    Coordinates are grid rows, so index 0 is the header and data starts at 1.
+    """
+    if not rule or not isinstance(rule, dict):
+        return []
+    columns = [str(c) for c in (table.get("columns") or [])]
+    rows = table.get("rows") or []
+    if target_column not in columns or not rows:
+        return []
+
+    col_idx = columns.index(target_column)
+    values = [r[col_idx] if col_idx < len(r) else None for r in rows]
+    hits = _matching_rows(values, rule)
+    if not hits:
+        return []
+
+    bg = rule.get("color_bg") or _DEFAULT_BG
+    fg = rule.get("color_text") or _DEFAULT_FG
+    whole_row = str(rule.get("scope") or "row") == "row"
+
+    highlights = []
+    for i in hits:
+        targets = range(len(columns)) if whole_row else [col_idx]
+        for c in targets:
+            highlights.append({"row": i + 1, "col": c, "bg": bg, "color": fg})
+    return highlights
+
+
 def _result_to_grid(table: dict[str, Any] | None) -> list[list[Any]] | None:
     """Flatten a sandbox table result into the [[header...], [row...]] grid
     UniverGrid renders. Returns None when the result is not a table."""
@@ -317,6 +415,7 @@ Hãy sửa lại công thức Excel và mã kiểm thử Python để chạy th�
         "explanation": explanation,
         "verified_in_sandbox": True,
         "target": target,
+        "highlights": _compute_highlights(table, target_col, cond_rule),
         "sheet_title": target_col if target == "new_sheet" else None,
         "grid": grid,
         "total_rows": int(table.get("total_rows") or max(len(grid) - 1, 0)),

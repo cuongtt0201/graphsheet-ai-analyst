@@ -755,6 +755,11 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
   const [copilotPrompt, setCopilotPrompt] = useState("");
   const [copilotBusy, setCopilotBusy] = useState(false);
   const [copilotResult, setCopilotResult] = useState<SheetCopilotResult | null>(null);
+  const [copilotSheetKey, setCopilotSheetKey] = useState<string | null>(null);
+  // Source sheets whose grid the copilot has replaced. Their grid is now built
+  // from the cleaned dataframe, so the header sits at row 0 - the detector's
+  // header_row still describes the raw file and would bold the wrong row.
+  const [copilotGridKeys, setCopilotGridKeys] = useState<Record<string, true>>({});
   // Univer rebuilds on signature change; an edit that only rewrites values
   // leaves rows and columns identical, so the parent bumps this instead.
   const [gridRevision, setGridRevision] = useState(0);
@@ -838,6 +843,7 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
     try {
       const res = await api.sheetCopilot(prompt, activeKey);
       setCopilotResult(res);
+      setCopilotSheetKey(activeKey);
       // The backend only answers ok:true after running the code in the sandbox,
       // and refuses rather than returning a partial grid - so anything that
       // arrives here is safe to put on screen whole.
@@ -853,8 +859,10 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
             ...prev,
           ]);
           setActiveKey(key);
+          setCopilotSheetKey(key);
         } else {
           setGridCache((prev) => ({ ...prev, [activeKey]: res.grid! }));
+          setCopilotGridKeys((prev) => ({ ...prev, [activeKey]: true }));
           setGridRevision((n) => n + 1);
         }
         setCopilotPrompt("");
@@ -1693,12 +1701,28 @@ function isExecutiveReportRequest(query: string): boolean {
 
   const activeSheet: GridSheet | null = useMemo(() => {
     if (activeKey === "dashboard") return null;
+    // A copilot tint belongs to the sheet it was computed on, not to whatever
+    // sheet the user has since clicked over to.
+    const highlights =
+      copilotResult?.ok && copilotSheetKey === activeKey ? copilotResult.highlights : undefined;
+
     const rs = resultSheets.find((r) => r.key === activeKey);
-    if (rs) return { name: rs.name, grid: tableToGrid(rs.table) };
+    // A result table is built column-first, so its header is always row 0.
+    if (rs) return { name: rs.name, grid: tableToGrid(rs.table), headerRow: 0, highlights };
+
     const t = tables.find((p) => p.source_id === activeKey);
-    if (t && gridCache[t.source_id]) return { name: t.sheet, grid: gridCache[t.source_id] };
+    if (t && gridCache[t.source_id]) {
+      return {
+        name: t.sheet,
+        grid: gridCache[t.source_id],
+        // Where the detector says the header is - the same row the banner above
+        // the grid talks about, so the two finally agree on screen.
+        headerRow: copilotGridKeys[t.source_id] ? 0 : t.detection?.header_row ?? null,
+        highlights,
+      };
+    }
     return null;
-  }, [activeKey, resultSheets, tables, gridCache]);
+  }, [activeKey, resultSheets, tables, gridCache, copilotResult, copilotSheetKey, copilotGridKeys]);
 
   // Shared card renderer for every dashboard layout below - only the
   // surrounding arrangement (grid/columns/story flow) differs per layout.
