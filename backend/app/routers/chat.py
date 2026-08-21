@@ -355,8 +355,8 @@ async def diagnostics_memory(request: Request):
     for s in skills:
         usage = s.get("usage_count") or 0
         success = s.get("success_count") or 0
-        rate = (success / usage) if usage >= 3 else 1.0
-        retired = usage >= 3 and rate < 0.3
+        rate = (success / usage) if usage >= graph.RETIRE_MIN_TRIALS else 1.0
+        retired = usage >= graph.RETIRE_MIN_TRIALS and rate < graph.RETIRE_SUCCESS_RATE
         formatted_skills.append({
             "name": s["name"],
             "description": s["description"],

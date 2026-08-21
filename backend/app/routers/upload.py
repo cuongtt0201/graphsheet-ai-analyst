@@ -370,11 +370,16 @@ async def upload(request: Request, files: list[UploadFile]):
                 # Proactive Recipe Recall: Check if user built a dashboard on this exact structure before
                 if not is_sample and active_fp:
                     try:
-                        past_recipes = graph.query_recipes_by_fingerprint(user_id, active_fp)
-                        if past_recipes:
-                            recipe = past_recipes[0]
-                            kpi_count = len(recipe.get("kpis") or [])
-                            chart_count = len(recipe.get("charts") or [])
+                        # graph.query_recipes_by_fingerprint never existed, so every
+                        # upload raised AttributeError into the except below and the
+                        # recall message was never once shown. The real lookup is
+                        # find_matching_recipe, which returns one recipe whose counts
+                        # live under the parsed layout, not at the top level.
+                        recipe = graph.find_matching_recipe(user_id, active_fp)
+                        if recipe:
+                            layout = recipe.get("layout_obj") or {}
+                            kpi_count = len(layout.get("kpis") or [])
+                            chart_count = len(layout.get("charts") or [])
                             step(f"💡 Nhận diện cấu trúc quen thuộc! Bạn từng xây Dashboard ({kpi_count} KPI, {chart_count} biểu đồ) với cấu trúc dữ liệu này.")
                     except Exception as exc:
                         print(f"[upload] recipe recall failed: {exc}")

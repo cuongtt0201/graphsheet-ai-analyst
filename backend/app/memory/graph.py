@@ -275,6 +275,36 @@ def get_personal_skills(owner_id: str) -> list[dict]:
         return []
 
 
+# A skill is retired once it has a real track record and that record is bad.
+# Below MIN_TRIALS there is no record yet, and a first failure must not bury a
+# skill that would have worked the next four times. Keep these in step with the
+# status shown in routers/chat.py's memory diagnostics.
+RETIRE_MIN_TRIALS = 3
+RETIRE_SUCCESS_RATE = 0.3
+
+
+def get_retired_skills(owner_id: str) -> set[str]:
+    """Names of this user's skills that have failed their way out of the pool.
+
+    skills_manager calls this before handing personal skills to the sandbox.
+    The function did not exist, so the call raised into a bare except and every
+    retired skill kept being offered to the model - the retirement rule was
+    computed for the diagnostics screen and enforced nowhere.
+    """
+    if not ENABLED or not owner_id:
+        return set()
+    rows = _run(
+        """
+        MATCH (s:Skill {owner_id: $owner_id})
+        WHERE coalesce(s.usage_count, 0) >= $min_trials
+          AND toFloat(coalesce(s.success_count, 0)) / s.usage_count < $rate
+        RETURN s.name AS name
+        """,
+        owner_id=owner_id, min_trials=RETIRE_MIN_TRIALS, rate=RETIRE_SUCCESS_RATE,
+    )
+    return {r["name"] for r in (rows or []) if r.get("name")}
+
+
 def record_skill_usage(owner_id: str, name: str, success: bool) -> None:
     _run(
         """

@@ -77,7 +77,16 @@ YÊU CẦU:
    Với "summary" thì đây là công thức tổng hợp (vd `=COUNTA(A:A)-1`) chỉ để người dùng
    tham khảo, không dán vào bảng.
 
-3. `python_verification_code`: Mã Python gán vào biến `result`:
+3. `python_verification_code`: Mã Python gán vào biến `result`.
+
+   RÀNG BUỘC SANDBOX (vi phạm là bị chặn, không chạy):
+   - CẤM mọi câu lệnh `import`. `pd` (pandas), `np` (numpy), `df` (bảng đầu tiên)
+     và `dfs` (tất cả các bảng) đã có sẵn trong phạm vi — cứ dùng thẳng.
+   - Không đọc/ghi file, không gọi mạng.
+   - Với "conditional_formatting" thì KHÔNG biến đổi dữ liệu: viết `result = df`.
+     Việc tô màu do `conditional_format_rule` mô tả, không phải do mã Python làm.
+
+   Nội dung theo từng loại:
    - "add_column_formula": `result` = TOÀN BỘ DataFrame gốc kèm cột mới
      (vd `result = df.assign(**{{"Lợi nhuận": df["Doanh thu"] - df["Chi phí"]}})`).
    - "summary": `result` = DataFrame tổng hợp GỌN, chỉ gồm dòng/cột cần thiết

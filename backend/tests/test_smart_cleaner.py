@@ -112,3 +112,24 @@ def test_identifier_hints_still_match_across_separators():
     assert list(out["Số hoá đơn"]) == ["7001", "7002", "7003", "7004", "7005"]
     assert list(out["customer-id"]) == ["5001", "5002", "5003", "5004", "5005"]
     assert pd.api.types.is_numeric_dtype(out["Doanh thu"])
+
+
+def test_identifier_survives_the_whole_ingestion_pipeline():
+    """The cleaner's protection is worthless if a later step re-coerces.
+
+    clean_and_profile ran after clean_dataframe_silently and turned "0001" back
+    into 1.0, so the guard never actually reached the user's data.
+    """
+    from app.data.profiler import clean_and_profile
+
+    df = pd.DataFrame({
+        "Mã CT": ["0001", "0002", "0003", "0004", "0005"],
+        "SĐT": ["0912345678", "0987654321", "0901234567", "0911111111", "0922222222"],
+        "Doanh thu": ["1.500.000", "2.400.000", "900.000", "3.100.000", "750.000"],
+    })
+    cleaned, _ = clean_and_profile(clean_dataframe_silently(df))
+
+    assert list(cleaned["Mã CT"]) == ["0001", "0002", "0003", "0004", "0005"]
+    assert list(cleaned["SĐT"])[0] == "0912345678"
+    # The money column must still convert - the guard is narrow, not blanket.
+    assert pd.api.types.is_numeric_dtype(cleaned["Doanh thu"])

@@ -137,8 +137,17 @@ def _looks_like_date(col_name: str, series: pd.Series) -> bool:
 def _coerce_types(df: pd.DataFrame) -> list[dict]:
     """Mutates df in place, converting text columns that are really numbers or
     dates. Returns a log of what changed."""
+    from app.data.smart_cleaner import _is_identifier_column
+
     coercions = []
     for col in df.select_dtypes(include=["object", "string"]).columns:
+        # An order code, phone number or tax code parses as a number and is
+        # destroyed by becoming one: "0001" -> 1.0, irreversibly. The upload
+        # cleaner already refuses to touch these columns, but this ran after it
+        # and coerced them anyway, so the protection never reached the user.
+        sample = df[col].dropna().head(30).astype(str)
+        if len(sample) and _is_identifier_column(col, sample):
+            continue
         num, num_ratio = _try_numeric(df[col])
         if num is not None:
             df[col] = num
