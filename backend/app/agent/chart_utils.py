@@ -332,6 +332,15 @@ def condense_chat_chart(chart: dict | None) -> dict | None:
     values = chart.get("values")
     if not isinstance(labels, list) or not isinstance(values, list) or not labels:
         return chart
+
+    # Coerce here, at the one door a model-authored chart comes through.
+    # Gemini's schema takes a single type per field, so `values` is declared as
+    # string; every consumer downstream (MiniChart, the docx/pptx/xlsx chart
+    # renderer, dashboard KPIs) expects numbers. Converting at the boundary
+    # keeps that schema constraint from leaking into all of them.
+    values = [_num(v) if not isinstance(v, (int, float)) or isinstance(v, bool) else v
+              for v in values]
+
     pairs = list(zip(labels, values))
     capped = _condense_pairs(pairs, chart.get("type"))
     chart["labels"] = [lbl for lbl, _ in capped]

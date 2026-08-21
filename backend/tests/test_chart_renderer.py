@@ -44,3 +44,30 @@ def test_render_line_chart():
 def test_render_empty_chart_returns_none():
     assert render_chart_to_png({}) is None
     assert render_chart_to_png({"type": "bar", "values": []}) is None
+
+
+def test_chart_values_are_numeric_after_condensing():
+    """Gemini schemas take one type per field, so the model returns `values` as
+    strings. Everything downstream expects numbers, so the boundary converts."""
+    from app.agent.chart_utils import condense_chat_chart
+
+    chart = condense_chat_chart({
+        "type": "bar",
+        "title": "Doanh thu theo miền",
+        "labels": ["Bắc", "Trung", "Nam"],
+        "values": ["736000000", "653000000", "635000000"],
+    })
+
+    assert chart["values"] == [736000000.0, 653000000.0, 635000000.0]
+    assert all(isinstance(v, float) for v in chart["values"])
+
+
+def test_unparseable_chart_values_become_zero_not_a_crash():
+    from app.agent.chart_utils import condense_chat_chart
+
+    chart = condense_chat_chart({
+        "type": "bar",
+        "labels": ["A", "B"],
+        "values": ["", "n/a"],
+    })
+    assert chart["values"] == [0.0, 0.0]

@@ -34,7 +34,9 @@ _COPILOT_SCHEMA = {
             "type": "object",
             "properties": {
                 "condition": {"type": "string", "enum": ["greater_than", "less_than", "equal_to", "negative", "outlier"]},
-                "threshold": {"type": ["number", "string"]},
+                # One type only: Gemini rejects a JSON-Schema union list, and
+                # _numeric() parses "100" and 100 identically anyway.
+                "threshold": {"type": "string"},
                 "color_bg": {"type": "string", "description": "Mã màu hex, vd: '#FEE2E2' cho đỏ nhạt"},
                 "color_text": {"type": "string", "description": "Mã màu hex chữ"},
                 "scope": {

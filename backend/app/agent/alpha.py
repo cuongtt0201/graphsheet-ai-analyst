@@ -339,14 +339,21 @@ Trả về JSON:
         "properties": {
             "answer": {"type": "string"},
             "chart": {
-                "type": ["object", "null"],
+                # Gemini's Schema takes ONE type plus `nullable`; a JSON-Schema
+                # union list ("object"/"null") is rejected outright, which fails
+                # the whole request before it is sent.
+                "type": "object",
+                "nullable": True,
                 "properties": {
                     "type": {"type": "string", "enum": ["bar", "line", "pie", "vega"]},
                     "title": {"type": "string"},
                     "x_axis": {"type": "string"},
                     "y_axis": {"type": "string"},
                     "labels": {"type": "array", "items": {"type": "string"}},
-                    "values": {"type": "array", "items": {"type": ["number", "string", "null"]}},
+                    # Category axes carry labels and value axes carry numbers,
+                    # so the one type that loses nothing here is string; the
+                    # chart layer parses numerics out of it either way.
+                    "values": {"type": "array", "items": {"type": "string", "nullable": True}},
                     "vegaLiteSpec": {"type": "object"},
                 },
             },
