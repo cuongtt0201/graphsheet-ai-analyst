@@ -506,12 +506,43 @@ def _persist_copilot_result(state: dict, source_id: str | None, grid: list | Non
 
     state["dataframes"] = {**dfs, source_id: new_df}
 
-    # raw_grids is deliberately left alone. It is defined as the faithful
-    # "what the file actually looks like" view -- no cleaning, no coercion, no
-    # header inference -- and the header-row override reparses against it. A
-    # copilot column is not part of the file, so writing it there would corrupt
-    # the one reference both of those depend on. The edit lives in the analysis
-    # dataframe, which is what chat and charts read.
+    # raw_grids stays untouched: it is defined as the faithful "what the file
+    # actually looks like" view -- no cleaning, no coercion, no header inference
+    # -- and the header-row override reparses against it. A computed column is
+    # not part of the file. The edited grid is a DERIVED view, so it gets its
+    # own key; /api/sheet prefers it, which is what makes the column survive a
+    # refresh without either structure having to lie about what it holds.
+    derived = dict(state.get("derived_grids") or {})
+    derived[source_id] = {"grid": grid}
+    state["derived_grids"] = derived
+
+    # Reprofile the sheet. Without this the new column exists in the data but
+    # not in the profile, so it is missing from the schema every prompt is built
+    # from, and the grid has no format for it -- a "Lợi nhuận" column would sit
+    # there unformatted next to the money columns it was computed from.
+    _reprofile_sheet(state, source_id, new_df)
+
     state.pop("cleaned_df", None)
     return True
+
+
+def _reprofile_sheet(state: dict, source_id: str, df) -> None:
+    """Refresh one sheet's profile in place after its dataframe changed."""
+    from app.data.profiler import _profile_columns
+
+    profiles = state.get("profiles") or []
+    updated = []
+    for prof in profiles:
+        if prof.get("source_id") != source_id:
+            updated.append(prof)
+            continue
+        updated.append({
+            **prof,
+            "columns": [str(c) for c in df.columns],
+            "dtypes": {str(c): str(t) for c, t in df.dtypes.items()},
+            "row_count": len(df),
+            "column_profiles": _profile_columns(df),
+            "sample_rows": df.head(5).fillna("").astype(str).to_dict(orient="records"),
+        })
+    state["profiles"] = updated
 

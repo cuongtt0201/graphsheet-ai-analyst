@@ -4,8 +4,13 @@ FROM python:3.11-slim
 
 WORKDIR /srv/backend
 
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install from the lock, not from requirements.txt: the lock pins transitive
+# packages too. A rebuild that resolves dependencies freshly is how google-genai
+# jumped to 2.19 and broke every LLM call without a line of our code changing.
+# requirements.txt is copied alongside it as the record of what we depend on
+# directly and why each version was chosen.
+COPY backend/requirements.txt backend/requirements.lock.txt ./
+RUN pip install --no-cache-dir -r requirements.lock.txt
 
 COPY backend/app ./app
 COPY model_eval /srv/model_eval

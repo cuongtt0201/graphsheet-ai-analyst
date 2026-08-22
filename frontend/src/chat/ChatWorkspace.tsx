@@ -17,7 +17,7 @@ import {
   type UserMemories,
   type SheetCopilotResult,
 } from "../api";
-import type { GridSheet } from "./UniverGrid";
+import type { ColumnFormat, GridSheet } from "./UniverGrid";
 import Tour, { type TourStep } from "./Tour";
 import MiniChart from "./MiniChart";
 import SkeletonGrid from "./SkeletonGrid";
@@ -756,9 +756,10 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
   const [copilotBusy, setCopilotBusy] = useState(false);
   const [copilotResult, setCopilotResult] = useState<SheetCopilotResult | null>(null);
   const [copilotSheetKey, setCopilotSheetKey] = useState<string | null>(null);
-  // Source sheets whose grid the copilot has replaced. Their grid is now built
-  // from the cleaned dataframe, so the header sits at row 0 - the detector's
+  // Source sheets whose grid the copilot has replaced. Their grid is built from
+  // the cleaned dataframe, so the header sits at row 0 - the detector's
   // header_row still describes the raw file and would bold the wrong row.
+  // Seeded from the server on load, because this outlives a refresh now.
   const [copilotGridKeys, setCopilotGridKeys] = useState<Record<string, true>>({});
   // Univer rebuilds on signature change; an edit that only rewrites values
   // leaves rows and columns identical, so the parent bumps this instead.
@@ -938,10 +939,13 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
         setTables(res.tables);
         setSelectedSources(res.tables.map(p => p.source_id));
         const cache: Record<string, (string | number)[][]> = {};
+        const derivedKeys: Record<string, true> = {};
         for (const p of res.tables) {
           if (p.grid) cache[p.source_id] = p.grid;
+          if (p.grid_derived) derivedKeys[p.source_id] = true;
         }
         setGridCache(cache);
+        setCopilotGridKeys(derivedKeys);
         const firstActive = res.tables.find((p) => p.grid)?.source_id || res.tables[0].source_id;
         setActiveKey(firstActive);
       } else {
@@ -1436,6 +1440,13 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
     try {
       const res = await api.sheet(sourceId);
       setGridCache((c) => ({ ...c, [sourceId]: res.grid }));
+      setCopilotGridKeys((prev) => {
+        if (res.derived) return { ...prev, [sourceId]: true };
+        if (!prev[sourceId]) return prev;
+        const next = { ...prev };
+        delete next[sourceId];
+        return next;
+      });
     } catch (e) {
       setMessages((m) => [...m, { role: "assistant", text: `Lỗi nạp sheet: ${(e as Error).message}` }]);
     } finally {
@@ -1454,6 +1465,20 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
     try {
       const res = await api.reparse(sourceId, oneBasedRow - 1); // grid is 0-based
       setTables((prev) => prev.map((t) => (t.source_id === sourceId ? res.profile : t)));
+      // Reparsing re-reads the file, so the server dropped any copilot column.
+      // Drop the cached derived grid too, then reload the raw one.
+      setCopilotGridKeys((prev) => {
+        if (!prev[sourceId]) return prev;
+        const next = { ...prev };
+        delete next[sourceId];
+        return next;
+      });
+      setGridCache((c) => {
+        const next = { ...c };
+        delete next[sourceId];
+        return next;
+      });
+      selectSheet(sourceId);
       setEditingHeader(false);
       setMessages((m) => [
         ...m,
@@ -1707,8 +1732,14 @@ function isExecutiveReportRequest(query: string): boolean {
       copilotResult?.ok && copilotSheetKey === activeKey ? copilotResult.highlights : undefined;
 
     const rs = resultSheets.find((r) => r.key === activeKey);
-    // A result table is built column-first, so its header is always row 0.
-    if (rs) return { name: rs.name, grid: tableToGrid(rs.table), headerRow: 0, highlights };
+    // A result table is built column-first, so its header is always row 0. Its
+    // columns come from whichever source sheets fed the query, so reuse every
+    // known format: a "Doanh thu" summed into a result is still money.
+    if (rs) {
+      const merged: Record<string, ColumnFormat> = {};
+      for (const t of tables) Object.assign(merged, t.column_formats ?? {});
+      return { name: rs.name, grid: tableToGrid(rs.table), headerRow: 0, highlights, columnFormats: merged };
+    }
 
     const t = tables.find((p) => p.source_id === activeKey);
     if (t && gridCache[t.source_id]) {
@@ -1719,6 +1750,7 @@ function isExecutiveReportRequest(query: string): boolean {
         // the grid talks about, so the two finally agree on screen.
         headerRow: copilotGridKeys[t.source_id] ? 0 : t.detection?.header_row ?? null,
         highlights,
+        columnFormats: t.column_formats,
       };
     }
     return null;

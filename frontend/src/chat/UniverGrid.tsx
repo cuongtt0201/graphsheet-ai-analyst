@@ -15,10 +15,17 @@ export interface CellHighlight {
   bold?: boolean;
 }
 
+/** How one column should be displayed, decided server-side from the column's
+ *  role and the unit the semantics pass recorded. */
+export type ColumnFormat = "currency" | "percent" | "id" | "plain";
+
 export interface GridSheet {
   name: string;
   /** Full matrix of cells (no separate header row) - exactly as in the file. */
   grid: (string | number)[][];
+  /** Column name -> format. Keyed by name, matched against the header row, so
+   * it survives the copilot inserting a column. */
+  columnFormats?: Record<string, ColumnFormat>;
   /** Index into `grid` of the row holding the column names, when it is known.
    * Messy business files rarely start at row 0 - the detector reports where it
    * actually is, and showing that is what makes "sửa dòng tiêu đề" legible. */
@@ -52,9 +59,25 @@ const NUM_PATTERN = "#,##0.##";
 const needsPattern = (v: unknown): v is number =>
   typeof v === "number" && Number.isFinite(v) && !Number.isInteger(v);
 
+/** Money always gets separators, including whole amounts: 1500000 is unreadable
+ *  and 1,500,000 is not. This is safe here only because the server decided the
+ *  column is currency - applying it to every integer would render a year 2026
+ *  as "2,026" and an order code 10023 as "10,023". */
+const CURRENCY_PATTERN = "#,##0.##";
+const PERCENT_PATTERN = "0.0%";
+
+const ROW_STRIPE_BG = "#F7FAF9";
+const GRID_LINE = "#E1E7E4";
+const BORDER_THIN = 1;
+
 /** What the user will actually see, used only to size the column. */
-function displayLength(v: string | number): number {
+function displayLength(v: string | number, format?: ColumnFormat): number {
   if (typeof v === "number" && Number.isFinite(v)) {
+    if (format === "percent") {
+      // "0.0%" renders 0.856 as "85.6%" - four characters wider than the raw
+      // value, so sizing on the raw value would clip it.
+      return (v * 100).toLocaleString("vi-VN", { maximumFractionDigits: 1 }).length + 1;
+    }
     return v.toLocaleString("vi-VN", { maximumFractionDigits: 2 }).length;
   }
   return String(v ?? "").length;
@@ -62,12 +85,18 @@ function displayLength(v: string | number): number {
 
 /** Univer style keys: bl bold (0/1), bg background, cl colour, ht horizontal
  *  align (2 = centre), n number format. */
+interface BorderSide {
+  s: number;
+  cl: { rgb: string };
+}
+
 interface CellStyle {
   n?: { pattern: string };
   bl?: 0 | 1;
   bg?: { rgb: string };
   cl?: { rgb: string };
   ht?: number;
+  bd?: { b?: BorderSide; r?: BorderSide };
 }
 
 interface Cell {
@@ -85,10 +114,23 @@ function gridToSheet(
   grid: (string | number)[][],
   headerRow?: number | null,
   highlights?: CellHighlight[],
+  columnFormats?: Record<string, ColumnFormat>,
 ) {
   const cellData: Record<number, Record<number, Cell>> = {};
   const widest: number[] = [];
   let maxCols = 1;
+
+  // Resolve name-keyed formats to column indices via the header row. Keying by
+  // name rather than position is what keeps them correct after the copilot
+  // inserts a column.
+  const formatOf: (ColumnFormat | undefined)[] = [];
+  if (columnFormats && headerRow != null && grid[headerRow]) {
+    grid[headerRow].forEach((cell, col) => {
+      formatOf[col] = columnFormats[String(cell ?? "").trim()];
+    });
+  }
+
+  const border: BorderSide = { s: BORDER_THIN, cl: { rgb: GRID_LINE } };
 
   // Index the highlights once; a rule can touch every row of a long sheet and
   // scanning the list per cell would be quadratic.
@@ -100,12 +142,29 @@ function gridToSheet(
     row.forEach((val, col) => {
       const v = val ?? "";
       const style: CellStyle = {};
-      if (needsPattern(v)) style.n = { pattern: NUM_PATTERN };
-      if (headerRow != null && r === headerRow) {
+      const isHeader = headerRow != null && r === headerRow;
+      const format = isHeader ? undefined : formatOf[col];
+
+      if (format === "currency" && typeof v === "number") {
+        style.n = { pattern: CURRENCY_PATTERN };
+      } else if (format === "percent" && typeof v === "number") {
+        style.n = { pattern: PERCENT_PATTERN };
+      } else if (format !== "id" && needsPattern(v)) {
+        style.n = { pattern: NUM_PATTERN };
+      }
+
+      // Ruled lines make a wide table scannable across a row.
+      style.bd = { b: border, r: border };
+
+      if (isHeader) {
         style.bl = 1;
         style.bg = { rgb: HEADER_BG };
         style.cl = { rgb: HEADER_FG };
         style.ht = HORIZONTAL_CENTER;
+      } else if (headerRow != null && r > headerRow && (r - headerRow) % 2 === 0) {
+        // Stripe every other DATA row, counted from the header, so the banding
+        // does not flip when a file has preamble rows above it.
+        style.bg = { rgb: ROW_STRIPE_BG };
       }
       const hit = tinted.get(`${r}:${col}`);
       if (hit) {
@@ -114,8 +173,8 @@ function gridToSheet(
         if (hit.color) style.cl = { rgb: hit.color };
         if (hit.bold) style.bl = 1;
       }
-      cellData[r][col] = Object.keys(style).length > 0 ? { v, s: style } : { v };
-      widest[col] = Math.max(widest[col] ?? 0, displayLength(v));
+      cellData[r][col] = { v, s: style };
+      widest[col] = Math.max(widest[col] ?? 0, displayLength(v, format));
     });
     maxCols = Math.max(maxCols, row.length);
   });
@@ -168,6 +227,7 @@ export default function UniverGrid({
         `${sheet.grid.length}x${sheet.grid[0]?.length ?? 0}`,
         sheet.headerRow ?? "-",
         sheet.highlights?.length ?? 0,
+        Object.keys(sheet.columnFormats ?? {}).length,
         revision,
       ].join(":")
     : "empty";
@@ -188,7 +248,14 @@ export default function UniverGrid({
       name: data.name,
       sheetOrder: ["s0"],
       sheets: {
-        s0: gridToSheet("s0", sheetName(data.name), data.grid, data.headerRow, data.highlights),
+        s0: gridToSheet(
+          "s0",
+          sheetName(data.name),
+          data.grid,
+          data.headerRow,
+          data.highlights,
+          data.columnFormats,
+        ),
       },
     });
 

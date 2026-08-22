@@ -421,14 +421,25 @@ async def upload(request: Request, files: list[UploadFile]):
 
 @router.post("/sheet")
 async def sheet(request: Request, body: dict):
-    """Return one sheet's raw grid on demand (lazy per-sheet loading)."""
+    """Return one sheet's grid on demand (lazy per-sheet loading).
+
+    A sheet the copilot has edited is served from derived_grids instead of
+    raw_grids, so the computed column is still there after a refresh. The
+    `derived` flag tells the frontend which it got: a derived grid is built from
+    the cleaned dataframe and always has its header on row 0, while a raw grid
+    keeps whatever preamble the file had above its header.
+    """
     state = get_state(request)
-    grids = state.get("raw_grids") or {}
     sid = body.get("source_id")
-    grid = grids.get(sid)
+
+    derived = (state.get("derived_grids") or {}).get(sid)
+    if derived is not None:
+        return {"source_id": sid, "grid": derived["grid"], "derived": True}
+
+    grid = (state.get("raw_grids") or {}).get(sid)
     if grid is None:
         raise HTTPException(404, "Sheet không tồn tại - hãy upload lại file.")
-    return {"source_id": sid, "grid": grid["grid"]}
+    return {"source_id": sid, "grid": grid["grid"], "derived": False}
 
 
 @router.post("/reparse")
@@ -476,6 +487,13 @@ def reparse_sheet(request: Request, body: dict):
     dataframes = dict(state.get("dataframes") or {})
     dataframes[source_id] = cleaned
     state["dataframes"] = dataframes
+
+    # Reparsing re-reads the file, so any copilot column is gone from the
+    # dataframe. Leaving its derived grid behind would keep showing a column the
+    # analysis no longer has.
+    derived = dict(state.get("derived_grids") or {})
+    if derived.pop(source_id, None) is not None:
+        state["derived_grids"] = derived
     state["profiles"] = [new_prof if p.get("source_id") == source_id else p for p in profiles]
     state.pop("cleaned_df", None)
 
@@ -514,7 +532,7 @@ def export_dashboard(request: Request, body: dict):
 # it actively tells the model about grain, formulas and statistical signals for
 # a sheet the user can no longer see.
 _SHEET_KEYED_STATE = ("semantics", "eda_facts", "formulas", "signals",
-                      "raw_grids", "raw_files", "file_fingerprints")
+                      "raw_grids", "derived_grids", "raw_files", "file_fingerprints")
 
 # Derived from ALL sheets together, so removing any one of them invalidates the
 # whole thing rather than part of it.

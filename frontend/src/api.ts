@@ -83,6 +83,11 @@ export interface FileProfile {
   grid?: (string | number)[][] | null;
   grid_rows?: number;
   has_data?: boolean;
+  /** True when `grid` above is a copilot-edited view rather than the raw file. */
+  grid_derived?: boolean;
+  /** Column name -> how to display it, decided from the column's role and the
+   * unit the semantics pass recorded. */
+  column_formats?: Record<string, "currency" | "percent" | "id" | "plain">;
   /** Smart header/table detection result, for the "sửa dòng tiêu đề" override. */
   detection?: {
     header_row: number;
@@ -462,8 +467,11 @@ export const api = {
   },
 
   tables: () => request<{ tables: FileProfile[] }>("/api/tables"),
+  /** `derived` marks a sheet the copilot has edited: its grid comes from the
+   * cleaned dataframe, so the header is row 0 rather than wherever it sat in
+   * the original file. */
   sheet: (sourceId: string) =>
-    request<{ source_id: string; grid: (string | number)[][] }>("/api/sheet", {
+    request<{ source_id: string; grid: (string | number)[][]; derived?: boolean }>("/api/sheet", {
       method: "POST",
       body: JSON.stringify({ source_id: sourceId }),
     }),

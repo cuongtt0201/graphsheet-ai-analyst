@@ -29,6 +29,31 @@ async def tables(request: Request):
     show the data before the user asks anything."""
     state = get_state(request)
     profiles = state.get("profiles") or []
+
+    # The initial sheet ships its grid inline so the page has something to draw
+    # before any /api/sheet call. Overlay the derived grid here too, or a
+    # refresh would paint the raw file over a sheet the copilot has edited and
+    # only correct itself once the user clicked away and back.
+    derived = state.get("derived_grids") or {}
+    if derived:
+        profiles = [
+            {**p, "grid": derived[p["source_id"]]["grid"], "grid_derived": True}
+            if p.get("source_id") in derived and p.get("grid") is not None
+            else p
+            for p in profiles
+        ]
+
+    # How each column should be displayed. Decided here, where the profile role
+    # and the semantics pass's recorded unit both exist; the browser has neither
+    # and would have to guess from the digits, which is how a year ends up
+    # formatted as "2.026".
+    from app.data.display_format import column_formats
+
+    semantics = state.get("semantics") or {}
+    profiles = [
+        {**p, "column_formats": column_formats(p, semantics.get(p.get("source_id")))}
+        for p in profiles
+    ]
     return {"tables": profiles}
 
 

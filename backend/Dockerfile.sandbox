@@ -4,7 +4,13 @@
 # Override the tag via SANDBOX_IMAGE if you use a different name.
 FROM python:3.11-slim
 
-# Quote every spec: RUN uses /bin/sh, which reads the ">" in "pandas>=2.2.0" as
-# an output redirection. Unquoted, this installed bare "pandas numpy pyarrow"
-# with no lower bound at all and left two junk files ("=2.2.0", "=15.0.0") in /.
-RUN pip install --no-cache-dir "pandas>=2.2.0" numpy "pyarrow>=15.0.0"
+# Pinned to the SAME versions the backend runs (see requirements.lock.txt).
+# The backend builds a DataFrame, ships it here as parquet, and reads the result
+# back; if the two pandas differ, a dtype or a groupby default can differ with
+# it, and the numbers the user is shown were computed under rules the backend
+# never applied. Bump these together with the lock, never on their own.
+#
+# Quote every spec: RUN uses /bin/sh, which reads ">" in "pandas>=2.2.0" as an
+# output redirection. Unquoted, this installed bare "pandas numpy pyarrow" with
+# no version constraint at all and left two junk files ("=2.2.0", "=15.0.0") in /.
+RUN pip install --no-cache-dir "pandas==3.0.5" "numpy==2.4.6" "pyarrow==25.0.1"
