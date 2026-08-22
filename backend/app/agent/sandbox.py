@@ -758,6 +758,10 @@ def _serialize(value, max_rows: int | None = None) -> dict:
         }
     if isinstance(value, pd.Series):
         return _serialize(value.reset_index(), max_rows)
+    if isinstance(value, dict) and value and all(isinstance(x, pd.DataFrame) for x in value.values()):
+        # Matches the container tier, which ships these as parquet. Here the
+        # frames never left the process, so they are handed back as they are.
+        return {"kind": "dataframes", "result": dict(value)}
     if isinstance(value, (np.integer, np.floating)):
         return {"kind": "scalar", "result": value.item()}
     if isinstance(value, (int, float, str, bool)):

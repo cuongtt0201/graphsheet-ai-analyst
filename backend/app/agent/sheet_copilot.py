@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 import pandas as pd
 from app.agent.sandbox import run_pandas
+from app.data.profiling import MAX_GRID_ROWS as GRID_DISPLAY_ROWS
 from app.ai.pool import call_ai, progress_emit
 
 logger = logging.getLogger(__name__)
@@ -146,12 +147,45 @@ def verify_excel_formula_column_mapping(excel_formula: str, dataframes: dict[str
 
 
 
-# A copilot mutation is written into the user's live sheet, so the verification
-# run has to return every row -- the default 200-row sample would land as a
-# silently truncated sheet. The ceiling exists so one absurd file cannot turn a
-# result into a hundred-megabyte JSON response; past it we refuse to apply
-# rather than apply a partial column.
-APPLY_MAX_ROWS = 50_000
+# Getting the result back as JSON forced a choice between truncating a real
+# sheet and refusing to touch it: a 268k-row file blew past any ceiling worth
+# setting. So the frame comes back as parquet instead -- `run_pandas` already
+# does this for a dict of DataFrames -- and no row limit is needed at all. The
+# dataframe is the source of truth; the grid below is a capped VIEW of it, the
+# same 10k cap every other sheet in the app is displayed under.
+_FULL_FRAME_KEY = "__copilot_result__"
+
+# Appended to the model's code. Wrapping a DataFrame in a dict is what routes it
+# through the parquet path; anything else (a scalar, a stray dict) is left alone
+# and serializes as before.
+_FULL_FRAME_WRAP = '''
+if isinstance(result, pd.DataFrame):
+    result = {'__copilot_result__': result}
+'''
+
+
+def _frame_of(run: dict) -> pd.DataFrame | None:
+    """The full DataFrame a wrapped run produced, if it produced one."""
+    if run.get("kind") != "dataframes":
+        return None
+    frames = run.get("result") or {}
+    frame = frames.get(_FULL_FRAME_KEY)
+    return frame if isinstance(frame, pd.DataFrame) else None
+
+
+def _table_of(df: pd.DataFrame, cap: int) -> dict[str, Any]:
+    """A JSON-safe table view of `df`, capped for display."""
+    head = df.head(cap).copy()
+    for col in head.columns:
+        if pd.api.types.is_datetime64_any_dtype(head[col]):
+            head[col] = head[col].astype(str)
+    rows = head.astype(object).where(pd.notna(head), "").values.tolist()
+    return {
+        "columns": [str(c) for c in head.columns],
+        "rows": rows,
+        "total_rows": int(len(df)),
+        "truncated": len(df) > cap,
+    }
 
 
 def _broadcast_columns(
@@ -326,7 +360,7 @@ def apply_sheet_copilot_mutation(
 
     # PRE-FLIGHT SANDBOX VERIFICATION
     _emit({"type": "step", "message": "🧪 Đang kiểm thử công thức trong Sandbox an toàn..."})
-    test_run = run_pandas_fn(py_code, dataframes, max_rows=APPLY_MAX_ROWS)
+    test_run = run_pandas_fn(py_code + _FULL_FRAME_WRAP, dataframes)
 
     if not test_run.get("ok"):
         # Pre-flight failed -> Retry once with error feedback
@@ -347,7 +381,7 @@ Hãy sửa lại công thức Excel và mã kiểm thử Python để chạy th�
             py_code = plan.get("python_verification_code", "")
             excel_formula = plan.get("excel_formula", "")
             explanation = plan.get("explanation", "")
-            test_run = run_pandas_fn(py_code, dataframes, max_rows=APPLY_MAX_ROWS)
+            test_run = run_pandas_fn(py_code + _FULL_FRAME_WRAP, dataframes)
         except Exception:
             pass
 
@@ -369,19 +403,10 @@ Hãy sửa lại công thức Excel và mã kiểm thử Python để chạy th�
             "explanation": "Công thức Excel tham chiếu ô vượt quá giới hạn số cột thực tế của bảng.",
         }
 
-    # A partial grid must never reach a live sheet: applying it would delete
-    # every row past the cap while looking like a successful edit.
-    table = test_run.get("result")
-    if isinstance(table, dict) and table.get("truncated"):
-        return {
-            "ok": False,
-            "applied": False,
-            "error": (
-                f"Kết quả có {table.get('total_rows', 0):,} dòng, vượt giới hạn "
-                f"{APPLY_MAX_ROWS:,} dòng của thao tác này."
-            ),
-            "explanation": "Đã hủy để không ghi đè bảng tính bằng dữ liệu thiếu dòng.",
-        }
+    # The frame arrives whole, however many rows it has. What gets capped from
+    # here on is only what is DRAWN.
+    full_df = _frame_of(test_run)
+    table = _table_of(full_df, GRID_DISPLAY_ROWS) if full_df is not None else test_run.get("result")
 
     # Route the result: a per-row edit lands on the sheet, anything that answers
     # with a single number or a grouped total opens as its own sheet.
@@ -417,6 +442,9 @@ Hãy sửa lại công thức Excel và mã kiểm thử Python để chạy th�
     _emit({"type": "step", "message": f"✅ Công thức và tham chiếu ô ({mapping_msg}) đã xác thực 100%!"})
 
     return {
+        # The full frame, for the caller to write into session state. Popped
+        # before the response is serialized -- it is a DataFrame, not JSON.
+        _FULL_FRAME_KEY: full_df,
         "ok": True,
         "applied": True,
         "mutation_type": mutation_type,
@@ -430,5 +458,8 @@ Hãy sửa lại công thức Excel và mã kiểm thử Python để chạy th�
         "sheet_title": target_col if target == "new_sheet" else None,
         "grid": grid,
         "total_rows": int(table.get("total_rows") or max(len(grid) - 1, 0)),
+        # True when the sheet has more rows than the grid draws. The edit still
+        # applied to every one of them; only the view is short.
+        "grid_truncated": bool(table.get("truncated")),
         "preview": table,
     }

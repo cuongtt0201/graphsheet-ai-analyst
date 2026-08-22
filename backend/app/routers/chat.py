@@ -177,6 +177,24 @@ async def chat(request: Request, body: dict):
                                         semantics=state.get("semantics"),
                                         eda_facts=state.get("eda_facts"))
 
+                # A sheet edit changes session state, which answer_question has
+                # no handle on. Apply it here, the same way /agent/sheet/copilot
+                # does, so chat and that endpoint cannot drift apart.
+                mutation = reply.get("sheet_mutation")
+                if mutation is not None:
+                    from app.agent.sheet_copilot import _FULL_FRAME_KEY
+                    from app.routers.agent import _persist_copilot_result
+
+                    full_df = mutation.pop(_FULL_FRAME_KEY, None)
+                    target_sid = (profiles[0].get("source_id") if profiles else None)
+                    if mutation.get("ok") and mutation.get("target") != "new_sheet":
+                        mutation["persisted"] = _persist_copilot_result(
+                            state, target_sid, mutation.get("grid"), full_df
+                        )
+                    else:
+                        mutation["persisted"] = False
+                    mutation["source_id"] = target_sid
+
                 # Feedback loop: bump usage/success on the memories the model relied
                 # on (an errored reply counts against them; wrong ones get deleted).
                 valid_ids = {b["id"] for b in behaviors}

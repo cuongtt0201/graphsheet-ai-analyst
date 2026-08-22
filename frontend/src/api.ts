@@ -223,6 +223,10 @@ export interface ChatReply {
   follow_up?: string[];
   /** True when this turn synthesized new sheets - the client should re-fetch /api/tables. */
   generated?: boolean;
+  /** Set when the turn EDITED the spreadsheet rather than answering about it.
+   * Carries the same payload the copilot endpoint returns, plus the source_id
+   * the server applied it to. */
+  sheet_mutation?: SheetCopilotResult & { source_id?: string | null };
   /** The planner's one-line explanation of the approach it chose. */
   reason?: string;
   /** True when the AI asked the user to disambiguate instead of guessing;

@@ -67,7 +67,7 @@ _DECISION_SCHEMA = {
     "type": "object",
     "required": ["mode", "reason"],
     "properties": {
-        "mode": {"type": "string", "enum": ["answer", "code", "clarify"]},
+        "mode": {"type": "string", "enum": ["answer", "code", "sheet", "clarify"]},
         "reason": {"type": "string"},
         "answer": {"type": "string"},
         "code": {"type": "string"},
@@ -97,11 +97,15 @@ Lịch sử hội thoại (nén: U=người dùng hỏi, A[tag]=bạn đã trả
 {workspace_block}{memory_block}{skills_block}
 Câu hỏi mới của người dùng: "{question}"
 
-Choose ONE of the three modes, and output a SINGLE JSON matching the schema:
+Choose ONE mode, and output a SINGLE JSON matching the schema:
 - If the question is qualitative / about the file structure (description, missing columns, meaning...) and can be answered directly from the schema:
   {{"mode": "answer", "answer": "<Vietnamese answer explaining the schema/structure>", "reason": "<1-sentence explanation of your choice>", "follow_up": ["<2-3 natural next questions in Vietnamese that build on this answer, using exact column/sheet names from the schema>"]}}
 - If it requires calculation of exact numbers (sum, mean, group by, filter, rank...):
   {{"mode": "code", "code": "<pandas python code snippet>", "reason": "<1-sentence explanation of your choice>"}}
+- If the user wants the SPREADSHEET ITSELF changed rather than a question answered — add a column, compute a value per row, colour rows by a condition ("thêm cột lợi nhuận", "tính % tăng trưởng cho từng dòng", "tô đỏ các dòng lỗ"):
+  {{"mode": "sheet", "reason": "<1-sentence explanation of your choice>"}}
+  Do NOT write code for this mode; the spreadsheet copilot plans the formula itself.
+  The dividing line is where the answer belongs: "tổng doanh thu là bao nhiêu?" is a question -> mode=code; "thêm cột doanh thu thuần vào bảng" changes the sheet -> mode=sheet. When the user says thêm/tạo/chèn cột, tô màu, đánh dấu, định dạng, it is mode=sheet.
 - If the question is genuinely AMBIGUOUS and guessing wrong would produce a confidently WRONG number:
   {{"mode": "clarify", "clarify_question": "<một câu hỏi ngắn bằng tiếng Việt để làm rõ>", "clarify_options": ["<2-4 lựa chọn cụ thể, dùng đúng tên cột/sheet có thật>"], "reason": "<1-sentence>"}}
 
@@ -467,6 +471,41 @@ Output a SINGLE JSON matching the schema:
 """
 
 
+def _sheet_answer(mutation: dict) -> str:
+    """What the chat says after a sheet edit -- the formula included, because
+    the user asked for a spreadsheet change and a formula is the thing they can
+    check, reuse and paste elsewhere."""
+    if not mutation.get("ok"):
+        why = mutation.get("error") or "không rõ nguyên nhân"
+        note = mutation.get("explanation")
+        return f"⛔ Chưa áp được lên bảng tính: {why}" + (f"\n\n{note}" if note else "")
+
+    lines = []
+    if mutation.get("target") == "new_sheet":
+        lines.append("✅ Đã mở kết quả thành sheet riêng — bảng gốc giữ nguyên.")
+    else:
+        rows = mutation.get("total_rows") or 0
+        col = mutation.get("target_column")
+        lines.append(
+            f"✅ Đã thêm cột **{col}** cho toàn bộ {rows:,} dòng."
+            if col else f"✅ Đã cập nhật bảng tính ({rows:,} dòng)."
+        )
+        if mutation.get("grid_truncated"):
+            # The edit covered every row; only the drawing is short. Saying so
+            # stops "it only did the first 10,000" from being a fair reading.
+            drawn = max(len(mutation.get("grid") or []) - 1, 0)
+            lines.append(
+                f"(Lưới chỉ vẽ {drawn:,} dòng đầu cho nhẹ máy, "
+                "nhưng công thức đã áp cho tất cả.)"
+            )
+
+    if mutation.get("excel_formula"):
+        lines.append(f"\nCông thức Excel: `{mutation['excel_formula']}`")
+    if mutation.get("explanation"):
+        lines.append("\n" + mutation["explanation"])
+    return "\n".join(lines)
+
+
 def answer_question(profiles: list[dict], dataframes: dict, question: str, history: list[dict],
                     behaviors: list[dict] | None = None, user_id: str | None = None,
                     workspace_block: str = "", semantics: dict | None = None,
@@ -548,6 +587,29 @@ def answer_question(profiles: list[dict], dataframes: dict, question: str, histo
                 "table": None, "chart": None, "scalar": None, "error": None,
                 "follow_up": decision.get("follow_up") or [],
                 "reason": reason, "used_memory_ids": used_memory_ids}
+
+    if decision["mode"] == "sheet":
+        # The chat box is the only place the user types, so a request to change
+        # the sheet is answered by changing the sheet -- the copilot plans the
+        # formula, proves it in the sandbox, and the reply carries the result
+        # for the grid to apply.
+        from app.agent.sheet_copilot import apply_sheet_copilot_mutation
+
+        _step("🧮 Đang lên công thức cho bảng tính...")
+        mutation = apply_sheet_copilot_mutation(
+            user_prompt=question,
+            dataframes=dataframes,
+            schema_context=schema,
+            sheet_id=(profiles[0].get("source_id") if profiles else None),
+        )
+        return {
+            "answer": _sheet_answer(mutation),
+            "code": None, "table": None, "chart": None, "scalar": None,
+            "error": None if mutation.get("ok") else mutation.get("error"),
+            "sheet_mutation": mutation,
+            "follow_up": decision.get("follow_up") or [],
+            "reason": reason, "used_memory_ids": used_memory_ids,
+        }
 
     # mode == "code": Dispatch to the Alpha Meta-Cognitive Orchestrator (Bầy Agent Trồi Sinh)
     from app.agent.alpha import run_alpha_cognition

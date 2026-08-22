@@ -462,6 +462,10 @@ def mutate_sheet_via_copilot(request: Request, body: dict):
         schema_context=schema_context,
         sheet_id=source_id,
     )
+    # The full frame rides along as a DataFrame; it must not reach the response.
+    from app.agent.sheet_copilot import _FULL_FRAME_KEY
+
+    full_df = result.pop(_FULL_FRAME_KEY, None)
     if not result.get("ok"):
         return result
 
@@ -470,17 +474,25 @@ def mutate_sheet_via_copilot(request: Request, body: dict):
     if result.get("target") == "new_sheet":
         result["persisted"] = False
     else:
-        result["persisted"] = _persist_copilot_result(state, source_id, result.get("grid"))
+        result["persisted"] = _persist_copilot_result(
+            state, source_id, result.get("grid"), full_df
+        )
     return result
 
 
-def _persist_copilot_result(state: dict, source_id: str | None, grid: list | None) -> bool:
-    """Write a verified copilot grid back into session state.
+def _persist_copilot_result(
+    state: dict, source_id: str | None, grid: list | None, full_df=None
+) -> bool:
+    """Write a verified copilot result back into session state.
 
     Only an edit that keeps the sheet's shape is persisted: same row count, and
     every original column still present. An aggregation or a filter would
     overwrite the source table with a summary of itself, which is data loss the
     user never asked for -- those are returned for display only.
+
+    `full_df` is the sandbox's actual frame, every row of it. `grid` is only the
+    view the browser draws, capped like every other sheet, so a 268k-row file is
+    edited in full while the user still sees the first 10k.
     """
     if not source_id or not grid or len(grid) < 1:
         return False
@@ -490,19 +502,24 @@ def _persist_copilot_result(state: dict, source_id: str | None, grid: list | Non
     if source_df is None:
         return False
 
-    header, *rows = grid
-    if len(rows) != len(source_df):
-        return False
-    if not set(str(c) for c in source_df.columns).issubset({str(c) for c in header}):
-        return False
-
     import pandas as pd
 
-    new_df = pd.DataFrame(rows, columns=[str(c) for c in header])
-    # The grid crossed as JSON, so numbers arrived as strings; recover the
-    # dtypes the analysis path depends on without touching identifier columns.
-    from app.data.smart_cleaner import clean_dataframe_silently
-    new_df = clean_dataframe_silently(new_df)
+    if isinstance(full_df, pd.DataFrame):
+        new_df = full_df
+    else:
+        # No frame came back (an in-process run that produced a plain table).
+        # Rebuild from the grid, which means recovering dtypes JSON dropped.
+        header, *rows = grid
+        new_df = pd.DataFrame(rows, columns=[str(c) for c in header])
+        from app.data.smart_cleaner import clean_dataframe_silently
+        new_df = clean_dataframe_silently(new_df)
+
+    # Shape is judged against the real frame, never against the drawn view -- a
+    # capped grid has fewer rows than the sheet by design.
+    if len(new_df) != len(source_df):
+        return False
+    if not {str(c) for c in source_df.columns}.issubset({str(c) for c in new_df.columns}):
+        return False
 
     state["dataframes"] = {**dfs, source_id: new_df}
 

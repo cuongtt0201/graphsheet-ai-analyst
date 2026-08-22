@@ -750,10 +750,8 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
 
   const [tables, setTables] = useState<FileProfile[]>([]);
   const [gridCache, setGridCache] = useState<Record<string, (string | number)[][]>>({});
-  // Sheet Copilot: prompt, in-flight flag, and the last verified result so the
-  // formula stays on screen after the grid updates.
-  const [copilotPrompt, setCopilotPrompt] = useState("");
-  const [copilotBusy, setCopilotBusy] = useState(false);
+  // Sheet edits arrive through chat now. What survives here is only what the
+  // GRID needs: the last edit's colour rule, and which sheet it applies to.
   const [copilotResult, setCopilotResult] = useState<SheetCopilotResult | null>(null);
   const [copilotSheetKey, setCopilotSheetKey] = useState<string | null>(null);
   // Source sheets whose grid the copilot has replaced. Their grid is built from
@@ -833,45 +831,6 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
       fetchMemoryDiagnostics();
     } catch (e) {
       alert(`Không thể xóa: ${(e as Error).message}`);
-    }
-  };
-
-  const handleRunCopilot = async () => {
-    const prompt = copilotPrompt.trim();
-    if (!prompt || !activeKey || activeKey === "dashboard") return;
-    setCopilotBusy(true);
-    setCopilotResult(null);
-    try {
-      const res = await api.sheetCopilot(prompt, activeKey);
-      setCopilotResult(res);
-      setCopilotSheetKey(activeKey);
-      // The backend only answers ok:true after running the code in the sandbox,
-      // and refuses rather than returning a partial grid - so anything that
-      // arrives here is safe to put on screen whole.
-      if (res.ok && res.grid) {
-        if (res.target === "new_sheet") {
-          // A total belongs in its own tab. Pasting it over the source sheet is
-          // what produced a column of 113 repeated down 113 rows.
-          const [header, ...rows] = res.grid;
-          const key = `result:${Date.now()}`;
-          const name = res.sheet_title?.trim() || `Tổng hợp ${resultSheets.length + 1}`;
-          setResultSheets((prev) => [
-            { key, name, table: { columns: header.map(String), rows, total_rows: rows.length, truncated: false } },
-            ...prev,
-          ]);
-          setActiveKey(key);
-          setCopilotSheetKey(key);
-        } else {
-          setGridCache((prev) => ({ ...prev, [activeKey]: res.grid! }));
-          setCopilotGridKeys((prev) => ({ ...prev, [activeKey]: true }));
-          setGridRevision((n) => n + 1);
-        }
-        setCopilotPrompt("");
-      }
-    } catch (e) {
-      setCopilotResult({ ok: false, error: (e as Error).message });
-    } finally {
-      setCopilotBusy(false);
     }
   };
 
@@ -1692,6 +1651,33 @@ function isExecutiveReportRequest(query: string): boolean {
         }
       }
 
+      // The turn changed the spreadsheet: put the result where the user is
+      // already looking instead of making them find it.
+      const mutation = finalReply.sheet_mutation;
+      if (mutation?.ok && mutation.grid) {
+        setCopilotResult(mutation);
+        if (mutation.target === "new_sheet") {
+          const [header, ...rows] = mutation.grid;
+          const key = `result:${Date.now()}`;
+          const name = mutation.sheet_title?.trim() || `Tổng hợp ${resultSheets.length + 1}`;
+          setResultSheets((prev) => [
+            { key, name, table: { columns: header.map(String), rows, total_rows: rows.length, truncated: false } },
+            ...prev,
+          ]);
+          setActiveKey(key);
+          setCopilotSheetKey(key);
+        } else {
+          const sid = mutation.source_id || activeKey;
+          setGridCache((prev) => ({ ...prev, [sid]: mutation.grid! }));
+          setCopilotGridKeys((prev) => ({ ...prev, [sid]: true }));
+          setCopilotSheetKey(sid);
+          setActiveKey(sid);
+          setGridRevision((n) => n + 1);
+          // The sheet gained a column, so its profile and formats changed.
+          api.tables().then((res) => setTables(res.tables)).catch(() => {});
+        }
+      }
+
       let resultKey: string | undefined;
       if (finalReply.table) {
         resultKey = `result:${Date.now()}`;
@@ -2174,69 +2160,6 @@ function isExecutiveReportRequest(query: string): boolean {
                 </div>
               )}
 
-              {activeKey !== "dashboard" && activeSheet && viewMode === "grid" && (
-                <div className="copilot-bar">
-                  <input
-                    className="copilot-bar__input"
-                    placeholder="🧮 Bảo AI sửa bảng tính… (vd: thêm cột lợi nhuận = doanh thu - chi phí)"
-                    value={copilotPrompt}
-                    disabled={copilotBusy}
-                    onChange={(e) => setCopilotPrompt(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleRunCopilot();
-                    }}
-                  />
-                  <button
-                    className="button button--small button--primary"
-                    disabled={copilotBusy || !copilotPrompt.trim()}
-                    onClick={handleRunCopilot}
-                  >
-                    {copilotBusy ? "Đang kiểm thử…" : "Chạy"}
-                  </button>
-                  {copilotResult && (
-                    <button
-                      className="button button--small button--secondary"
-                      onClick={() => setCopilotResult(null)}
-                      title="Ẩn kết quả"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {activeKey !== "dashboard" && viewMode === "grid" && copilotResult && (
-                <div className={`copilot-result${copilotResult.ok ? "" : " copilot-result--error"}`}>
-                  {copilotResult.ok ? (
-                    <>
-                      <span className="copilot-result__badge">✅ Đã kiểm thử trong sandbox</span>
-                      {copilotResult.excel_formula && (
-                        <code className="copilot-result__formula">{copilotResult.excel_formula}</code>
-                      )}
-                      <span className="copilot-result__text">{copilotResult.explanation}</span>
-                      {/* The sheet on screen always updates; whether the change also
-                          reached the analysis data is a different fact, and saying so
-                          is the difference between "AI knows about the new column" and
-                          "it only looks like it does". */}
-                      <span className="copilot-result__text">
-                        {copilotResult.target === "new_sheet"
-                          ? "Đã mở thành sheet riêng — bảng gốc giữ nguyên."
-                          : copilotResult.persisted
-                          ? `Đã áp lên ${copilotResult.total_rows?.toLocaleString("vi-VN")} dòng — chat và biểu đồ dùng được cột mới.`
-                          : "Chỉ hiển thị trên bảng: kết quả đổi cấu trúc bảng nên chưa ghi vào dữ liệu phân tích."}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="copilot-result__badge">⛔ Đã hủy</span>
-                      <span className="copilot-result__text">{copilotResult.error}</span>
-                      {copilotResult.explanation && (
-                        <span className="copilot-result__text">{copilotResult.explanation}</span>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
 
               {/* Header-detection banner: show what row the AI treated as the
                   header, and let the user correct it when the file is messy. */}
