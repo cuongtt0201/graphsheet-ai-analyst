@@ -271,6 +271,42 @@ def drop_incomplete_period(layout: dict, label: str | None) -> int:
     return trimmed
 
 
+def trim_incomplete_period(state: dict, layout: dict) -> int:
+    """Apply drop_incomplete_period using whatever the session knows, in place.
+
+    Trimming only where a layout is BUILT is not enough: a layout is stored in
+    session state and read back later by the slide builder and the report
+    exporter, so a dashboard built before this existed -- or by any other path --
+    keeps its cliff forever. Every consumer calls this instead, and it is cheap
+    and idempotent: a series already trimmed no longer ends on the unfinished
+    period, so the second call finds nothing to do.
+    """
+    from app.data.trends import incomplete_last_period, pick_trend_columns
+
+    # A layout that already knows which period is unfinished can be trimmed
+    # without any dataframe at all -- which is the normal case for every request
+    # after the build.
+    marked = layout.get("incomplete_period")
+    if marked:
+        return drop_incomplete_period(layout, str(marked))
+
+    df = state.get("cleaned_df")
+    if df is None:
+        return 0
+    date_col, _, _ = pick_trend_columns(state.get("cleaned_schema") or {})
+    if not date_col:
+        return 0
+    found = incomplete_last_period(df, date_col)
+    if not found:
+        return 0
+    # Record the verdict on the layout itself. cleaned_df lives only for the
+    # duration of the build -- it is never persisted -- so a later reader has no
+    # dates to re-derive this from. Without the marker the guard silently does
+    # nothing on every request after the one that built the dashboard.
+    layout["incomplete_period"] = found[0]
+    return drop_incomplete_period(layout, found[0])
+
+
 def condense_layout(layout: dict) -> None:
     """Cap over-dense charts in a dashboard layout, in place.
 

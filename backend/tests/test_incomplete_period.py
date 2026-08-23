@@ -93,3 +93,111 @@ def test_no_label_means_no_change():
     layout = {"charts": [{"title": "x", "data": list(REAL_TREND)}]}
     assert drop_incomplete_period(layout, None) == 0
     assert len(layout["charts"][0]["data"]) == 10
+
+
+def test_the_guard_runs_where_a_layout_is_read_not_only_where_it_is_built():
+    """Trimming at build time alone leaves every existing dashboard broken.
+
+    A layout lives in session state and is read back later by the slide builder
+    and the report exporter. A dashboard built before this guard existed keeps
+    its cliff forever unless the guard also runs on the way out -- which is
+    exactly what happened: the fix shipped, and the next deck still drew it.
+    """
+    from app.agent.chart_utils import trim_incomplete_period
+
+    state = {
+        "cleaned_df": pd.DataFrame({
+            "Ngay": pd.date_range("2025-05-01", "2026-02-05", freq="D"),
+            "DoanhThu": 1.0,
+        }),
+        "cleaned_schema": {"column_profiles": [
+            {"name": "Ngay", "role": "date", "dtype": "datetime64[ns]"},
+            {"name": "DoanhThu", "role": "measure", "dtype": "float64", "sum": 100.0},
+        ]},
+    }
+    layout = {"charts": [{"title": "Xu hướng", "type": "line", "data": list(REAL_TREND)}]}
+
+    assert trim_incomplete_period(state, layout) == 1
+    assert layout["charts"][0]["data"][-1]["label"] == "2026-01"
+
+
+def test_trimming_twice_changes_nothing_the_second_time():
+    """Producers and consumers both call it, so it has to be idempotent."""
+    from app.agent.chart_utils import drop_incomplete_period
+
+    layout = {"charts": [{"title": "Xu hướng", "type": "line", "data": list(REAL_TREND)}]}
+    first = drop_incomplete_period(layout, "2026-02")
+    after_first = [d["label"] for d in layout["charts"][0]["data"]]
+    second = drop_incomplete_period(layout, "2026-02")
+
+    assert (first, second) == (1, 0)
+    assert [d["label"] for d in layout["charts"][0]["data"]] == after_first
+
+
+def test_the_reader_does_not_mutate_the_stored_layout():
+    """A view for one caller must not quietly edit what the session holds."""
+    from app.routers.chat import _layout_view
+
+    stored_charts = [{"title": "Xu hướng", "type": "line", "data": list(REAL_TREND)}]
+    state = {
+        "layout": {"charts": stored_charts, "kpis": [], "insights": []},
+        "cleaned_df": pd.DataFrame({
+            "Ngay": pd.date_range("2025-05-01", "2026-02-05", freq="D"),
+            "DoanhThu": 1.0,
+        }),
+        "cleaned_schema": {"column_profiles": [
+            {"name": "Ngay", "role": "date", "dtype": "datetime64[ns]"},
+            {"name": "DoanhThu", "role": "measure", "dtype": "float64", "sum": 100.0},
+        ]},
+    }
+
+    view = _layout_view(state)
+    assert len(view["charts"][0]["data"]) == 9
+    # The stored layout is untouched, so nothing else in the session shifts.
+    assert len(stored_charts[0]["data"]) == 10
+
+
+def test_the_verdict_is_recorded_so_later_requests_can_act_on_it():
+    """cleaned_df is never persisted -- it lives only for the build request.
+
+    A reader on any later request therefore has no dates to re-derive the
+    verdict from, and the guard did exactly nothing while appearing to run.
+    The build writes the answer onto the layout so the guard survives the
+    request that produced it.
+    """
+    from app.agent.chart_utils import trim_incomplete_period
+
+    state = {
+        "cleaned_df": pd.DataFrame({
+            "Ngay": pd.date_range("2025-05-01", "2026-02-05", freq="D"),
+            "DoanhThu": 1.0,
+        }),
+        "cleaned_schema": {"column_profiles": [
+            {"name": "Ngay", "role": "date"},
+            {"name": "DoanhThu", "role": "measure", "sum": 100.0},
+        ]},
+    }
+    layout = {"charts": [{"title": "Xu hướng", "type": "line", "data": list(REAL_TREND)}]}
+
+    assert trim_incomplete_period(state, layout) == 1
+    assert layout["incomplete_period"] == "2026-02"
+
+
+def test_a_marked_layout_is_trimmed_with_no_dataframe_at_all():
+    from app.agent.chart_utils import trim_incomplete_period
+
+    layout = {
+        "charts": [{"title": "Xu hướng", "type": "line", "data": list(REAL_TREND)}],
+        "incomplete_period": "2026-02",
+    }
+    assert trim_incomplete_period({}, layout) == 1
+    assert layout["charts"][0]["data"][-1]["label"] == "2026-01"
+
+
+def test_an_unmarked_layout_with_no_dataframe_is_left_alone():
+    """Nothing to go on is not licence to guess which point to delete."""
+    from app.agent.chart_utils import trim_incomplete_period
+
+    layout = {"charts": [{"title": "Xu hướng", "type": "line", "data": list(REAL_TREND)}]}
+    assert trim_incomplete_period({}, layout) == 0
+    assert len(layout["charts"][0]["data"]) == 10

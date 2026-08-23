@@ -79,6 +79,29 @@ async def save_dashboard_items(request: Request, body: dict):
     return {"ok": True, "count": len(items)}
 
 
+def _layout_view(state: dict) -> dict:
+    """The session's dashboard as {kpis, charts, insights}, guarded.
+
+    A layout is read back long after it was built -- possibly built before the
+    unfinished-period trim existed at all -- so the guard runs on the way OUT,
+    not only where the dashboard was produced. Charts are copied first: this is
+    a view for one caller, not an edit of the stored layout.
+    """
+    from app.agent.chart_utils import trim_incomplete_period
+
+    stored = state.get("layout") or {}
+    layout = {
+        **stored,
+        "charts": [dict(c) for c in (stored.get("charts") or []) if isinstance(c, dict)],
+    }
+    trim_incomplete_period(state, layout)
+    return {
+        "kpis": layout.get("kpis") or [],
+        "charts": layout.get("charts") or [],
+        "insights": layout.get("insights") or [],
+    }
+
+
 def _build_dashboard_now(state: dict, user_id: str, prompt: str) -> dict:
     """Run the auto-dashboard inline and return what it produced.
 
@@ -112,12 +135,7 @@ def _build_dashboard_now(state: dict, user_id: str, prompt: str) -> dict:
         logger.warning(f"[chat] inline dashboard build failed: {exc}")
         return {"kpis": [], "charts": [], "insights": []}
 
-    layout = state.get("layout") or {}
-    return {
-        "kpis": layout.get("kpis") or [],
-        "charts": layout.get("charts") or [],
-        "insights": layout.get("insights") or [],
-    }
+    return _layout_view(state)
 
 
 def _slide_source(state: dict) -> dict:
@@ -134,12 +152,7 @@ def _slide_source(state: dict) -> dict:
                 charts.append(chart)
         return {"kpis": kpis, "charts": charts, "insights": []}
 
-    layout = state.get("layout") or {}
-    return {
-        "kpis": layout.get("kpis") or [],
-        "charts": layout.get("charts") or [],
-        "insights": layout.get("insights") or [],
-    }
+    return _layout_view(state)
 
 
 @router.post("/chat")

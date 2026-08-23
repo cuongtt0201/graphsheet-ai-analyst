@@ -172,10 +172,9 @@ def refilter(request: Request, body: dict):
     Sync (not async): sandbox execution blocks, so FastAPI runs it in the
     threadpool and keeps the event loop free.
     """
-    from app.agent.chart_utils import condense_layout, drop_incomplete_period
+    from app.agent.chart_utils import condense_layout, trim_incomplete_period
     from app.agent.dashboard_filter import apply_filters
     from app.agent.sandbox import run_layout_script
-    from app.data.trends import incomplete_last_period, pick_trend_columns
 
     state = get_state(request)
     script = state.get("layout_script")
@@ -219,12 +218,7 @@ def refilter(request: Request, body: dict):
 
     # The filtered layout must get the same treatment as the built one, or
     # applying a filter would put the cliff back.
-    date_col, _, _ = pick_trend_columns(state.get("cleaned_schema") or {})
-    filtered_df = state.get("cleaned_df")
-    if filtered_df is not None and date_col:
-        found = incomplete_last_period(filtered_df, date_col)
-        if found:
-            drop_incomplete_period(layout, found[0])
+    trim_incomplete_period(state, layout)
 
     for k in layout["kpis"]:
         k["status"] = "ok"
@@ -266,6 +260,12 @@ def generate_report(request: Request, body: dict | None = None):
         trend_context = ""
     else:
         layout = state.get("layout") or {}
+        # Same reason as the slide path: this reads a layout back, so it can be
+        # handed one built before the trim existed.
+        from app.agent.chart_utils import trim_incomplete_period
+
+        layout = {**layout, "charts": [dict(c) for c in (layout.get("charts") or []) if isinstance(c, dict)]}
+        trim_incomplete_period(state, layout)
         kpis, charts = layout.get("kpis", []), layout.get("charts", [])
         insights = layout.get("insights", [])
         trend_context = format_trend_for_prompt(state.get("trend_signals"))

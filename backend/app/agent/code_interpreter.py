@@ -511,18 +511,12 @@ Always include date/time columns if the query implies trends.
     # but the chart it wrote still plotted five days of a month next to nine full
     # ones, so the caption said "growth" above a cliff. The picture wins that
     # argument with the reader, so the fix has to reach the picture.
-    from app.agent.chart_utils import drop_incomplete_period
-    from app.data.trends import incomplete_last_period
+    from app.agent.chart_utils import trim_incomplete_period
 
-    _cleaned = state.get("cleaned_df")
-    if _cleaned is not None and _date_col:
-        _found = incomplete_last_period(_cleaned, _date_col)
-        if _found:
-            _trimmed = drop_incomplete_period(layout, _found[0])
-            if _trimmed:
-                yield {"type": "step",
-                       "message": f"✂️ Bỏ kỳ {_found[0]} khỏi {_trimmed} biểu đồ "
-                                  f"(mới có ~{_found[1] * 100:.0f}% số ngày, vẽ vào sẽ thành sụt giả)."}
+    _trimmed = trim_incomplete_period(state, layout)
+    if _trimmed:
+        yield {"type": "step",
+               "message": f"✂️ Bỏ kỳ chưa trọn khỏi {_trimmed} biểu đồ (vẽ vào sẽ thành sụt giả)."}
 
     # Deterministic guard on the comparisons: the prompt asks the model not to
     # compare an all-time total against one month, but it has done exactly that
