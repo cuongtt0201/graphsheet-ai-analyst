@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 # Tuned for Vietnamese, which runs roughly 20-30% longer than English for the
 # same meaning; budgets set from English samples overflow here.
 MAX_SLIDES = 12
+# One slide is not a deck. A result this short almost always means validation
+# dropped most of what came back -- an empty slide, a chart reference that did
+# not resolve -- and shipping the remnant as a "presentation" hides that. The
+# floor is deliberately low so it catches breakage rather than second-guessing
+# a user who genuinely asked for something short.
+MIN_SLIDES = 2
 LIMITS = {
     "deck_title": 70,
     "deck_subtitle": 110,
@@ -183,21 +189,31 @@ def _clamp_slide(raw: dict, n_charts: int) -> dict | None:
 
 
 def clamp_deck(raw: dict, n_charts: int) -> dict:
-    """Enforce every budget on a model-authored deck."""
+    """Enforce every budget on a model-authored deck.
+
+    `dropped` counts slides that could not be rendered at all, so a caller can
+    tell "the model wrote three slides" from "the model wrote nine and six were
+    unusable" -- outcomes that look identical in the result otherwise.
+    """
     slides = []
+    dropped = 0
     for item in (raw.get("slides") or []):
-        if not isinstance(item, dict):
-            continue
-        slide = _clamp_slide(item, n_charts)
-        if slide is not None:
-            slides.append(slide)
         if len(slides) >= MAX_SLIDES:
             break
+        if not isinstance(item, dict):
+            dropped += 1
+            continue
+        slide = _clamp_slide(item, n_charts)
+        if slide is None:
+            dropped += 1
+        else:
+            slides.append(slide)
 
     return {
         "title": _clip(raw.get("title"), LIMITS["deck_title"]) or "Báo cáo phân tích",
         "subtitle": _clip(raw.get("subtitle"), LIMITS["deck_subtitle"]),
         "slides": slides,
+        "dropped": dropped,
     }
 
 
@@ -311,8 +327,14 @@ def build_deck(
         return {"ok": False, "error": f"Không dựng được bài thuyết trình: {exc}"}
 
     deck = clamp_deck(raw, n_charts=len(charts))
-    if not deck["slides"]:
-        return {"ok": False, "error": "Mô hình không trả về slide nào dùng được."}
+    dropped = deck.pop("dropped", 0)
+    if len(deck["slides"]) < MIN_SLIDES:
+        kept = len(deck["slides"])
+        detail = f" ({kept} slide dùng được, {dropped} slide bị loại)" if dropped else f" (chỉ {kept} slide)"
+        return {
+            "ok": False,
+            "error": f"Không dựng đủ nội dung cho một bài thuyết trình{detail}.",
+        }
 
     # Charts ride along so the browser renders them live rather than as images.
     deck["charts"] = charts

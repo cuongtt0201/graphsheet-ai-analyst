@@ -221,8 +221,10 @@ def test_slide_mode_uses_an_existing_dashboard_without_rebuilding(monkeypatch):
     ]))
     monkeypatch.setattr(chat_agent, "_load_chat_skills", lambda q, u: ("", "", {}))
     import app.agent.slides as slides_mod
-    monkeypatch.setattr(slides_mod, "call_ai",
-                        MagicMock(return_value={"title": "Deck", "slides": [{"layout": "section", "heading": "Phần 1"}]}))
+    monkeypatch.setattr(slides_mod, "call_ai", MagicMock(return_value={"title": "Deck", "slides": [
+        {"layout": "title", "heading": "Phần 1"},
+        {"layout": "closing", "bullets": ["Làm tiếp"]},
+    ]}))
 
     reply = chat_agent.answer_question(
         profiles=[_PROFILE],
@@ -274,3 +276,62 @@ def test_the_deck_schema_stays_small_enough_for_every_model_in_the_pool():
     # And the guidance still has to reach the model somewhere.
     assert "chart_split" in DECK_PROMPT
     assert "chart_index" in DECK_PROMPT
+
+
+def test_one_slide_is_not_a_deck():
+    """Shipping the remnant of a failed build as a "presentation" hides the failure."""
+    from app.agent.slides import MIN_SLIDES
+
+    mock = MagicMock(return_value={"title": "D", "slides": [{"layout": "section", "heading": "Một mình"}]})
+    res = build_deck("tạo slide", kpis=[{"title": "T", "value": "1"}], charts=[], call_ai_fn=mock)
+
+    assert MIN_SLIDES == 2
+    assert res["ok"] is False
+    assert "chỉ 1 slide" in res["error"]
+
+
+def test_the_error_separates_a_short_deck_from_a_broken_one():
+    """"Wrote three slides" and "wrote nine, six unusable" look identical in the
+    result. They are different problems, so the message names which happened."""
+    slides = [{"layout": "section", "heading": "Giữ"}] + [{"layout": "bullets", "bullets": []}] * 8
+    mock = MagicMock(return_value={"title": "D", "slides": slides})
+
+    res = build_deck("tạo slide", kpis=[{"title": "T", "value": "1"}], charts=[], call_ai_fn=mock)
+
+    assert res["ok"] is False
+    assert "8 slide bị loại" in res["error"]
+
+
+def test_two_slides_is_enough():
+    mock = MagicMock(return_value={"title": "D", "slides": [
+        {"layout": "title", "heading": "Kết quả"},
+        {"layout": "closing", "bullets": ["Làm tiếp"]},
+    ]})
+    res = build_deck("tạo slide", kpis=[{"title": "T", "value": "1"}], charts=[], call_ai_fn=mock)
+
+    assert res["ok"] is True
+    assert len(res["deck"]["slides"]) == 2
+    # The bookkeeping field is internal and must not reach the browser.
+    assert "dropped" not in res["deck"]
+
+
+def test_clamp_deck_reports_what_it_threw_away():
+    deck = clamp_deck({"title": "x", "slides": [
+        {"layout": "section", "heading": "Giữ"},
+        {"layout": "khong_co_that"},
+        "không phải dict",
+        {"layout": "kpi", "kpis": []},
+    ]}, n_charts=0)
+
+    assert len(deck["slides"]) == 1
+    assert deck["dropped"] == 3
+
+
+def test_the_cap_counts_kept_slides_not_examined_ones():
+    """A run of unusable slides must not eat the budget for good ones."""
+    junk = [{"layout": "bullets", "bullets": []}] * 30
+    good = [{"layout": "section", "heading": f"Phần {i}"} for i in range(MAX_SLIDES)]
+    deck = clamp_deck({"title": "x", "slides": junk + good}, n_charts=0)
+
+    assert len(deck["slides"]) == MAX_SLIDES
+    assert deck["dropped"] == 30
