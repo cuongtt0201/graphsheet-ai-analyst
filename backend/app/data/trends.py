@@ -205,6 +205,38 @@ def _top_movers(df: pd.DataFrame, date_col: str, value_col: str, group_col: str 
         return []
 
 
+def incomplete_last_period(df: pd.DataFrame, date_col: str | None) -> tuple[str, float] | None:
+    """(period_label, coverage) when the series ends mid-period, else None.
+
+    Split out of period_coverage_note so the warning text and the chart cleanup
+    decide from ONE computation. They disagreed before: the note told the model
+    not to call the last period a drop, and the model obeyed -- while the chart
+    kept plotting the raw partial value, so the caption said "growth" above a
+    cliff. Same data, two conclusions, and the picture is the one people believe.
+    """
+    if not date_col or date_col not in df.columns:
+        return None
+    try:
+        dt = pd.to_datetime(df[date_col], errors="coerce").dropna()
+        if dt.empty:
+            return None
+        last = dt.max()
+        span_days = (last - dt.min()).days
+        if span_days > 120:
+            coverage = last.day / last.days_in_month
+            label = last.strftime("%Y-%m")
+        elif span_days > 21:
+            coverage = (last.weekday() + 1) / 7
+            label = last.strftime("%Y-W%W")
+        else:
+            return None
+        if coverage >= 0.9:
+            return None
+        return label, float(coverage)
+    except Exception:  # noqa: BLE001 - detection that fails must not block a build
+        return None
+
+
 def period_coverage_note(df: pd.DataFrame, date_col: str | None) -> str:
     """Warning text about an INCOMPLETE final period, computed before any code
     is generated.
@@ -215,35 +247,24 @@ def period_coverage_note(df: pd.DataFrame, date_col: str | None) -> str:
     and one dashboard showed "+12.6%" next to "▼83.9%" for the same measure.
     The fix has to reach the model BEFORE it writes any comparison.
     Returns "" when the last period is complete or there is no date column."""
-    if not date_col or date_col not in df.columns:
+    found = incomplete_last_period(df, date_col)
+    if not found:
         return ""
+    label, coverage = found
+    unit = "tuần" if "-W" in label else "tháng"
     try:
-        dt = pd.to_datetime(df[date_col], errors="coerce").dropna()
-        if dt.empty:
-            return ""
-        last = dt.max()
-        span_days = (last - dt.min()).days
-        if span_days > 120:
-            coverage = last.day / last.days_in_month
-            unit, label = "tháng", last.strftime("%Y-%m")
-        elif span_days > 21:
-            coverage = (last.weekday() + 1) / 7
-            unit, label = "tuần", last.strftime("%Y-W%W")
-        else:
-            return ""
-        if coverage >= 0.9:
-            return ""
-        return (
-            f"\n⚠️ CẢNH BÁO KỲ CUỐI CHƯA TRỌN VẸN: dữ liệu kết thúc ngày {last.date()}, "
-            f"tức {unit} cuối cùng ({label}) mới có khoảng {coverage * 100:.0f}% số ngày.\n"
-            f"KHI TÍNH `compare_value` HOẶC BẤT KỲ SO SÁNH KỲ NÀO: TUYỆT ĐỐI không so {unit} cuối này "
-            f"với một {unit} đầy đủ — sẽ ra mức giảm giả tạo tới -80% dù thực tế không hề giảm.\n"
-            f"Hãy làm MỘT trong hai cách: (a) bỏ qua {unit} chưa trọn vẹn, lấy {unit} hoàn chỉnh gần nhất "
-            f"làm giá trị hiện tại và {unit} liền trước làm `compare_value`; hoặc (b) so cùng số ngày đầu "
-            f"{unit} (ví dụ 5 ngày đầu {unit} này với 5 ngày đầu {unit} trước).\n"
-        )
-    except Exception:  # noqa: BLE001 - a warning that fails must not block the build
+        last = pd.to_datetime(df[date_col], errors="coerce").dropna().max().date()
+    except Exception:  # noqa: BLE001
         return ""
+    return (
+        f"\n⚠️ CẢNH BÁO KỲ CUỐI CHƯA TRỌN VẸN: dữ liệu kết thúc ngày {last}, "
+        f"tức {unit} cuối cùng ({label}) mới có khoảng {coverage * 100:.0f}% số ngày.\n"
+        f"KHI TÍNH `compare_value` HOẶC BẤT KỲ SO SÁNH KỲ NÀO: TUYỆT ĐỐI không so {unit} cuối này "
+        f"với một {unit} đầy đủ — sẽ ra mức giảm giả tạo tới -80% dù thực tế không hề giảm.\n"
+        f"Hãy làm MỘT trong hai cách: (a) bỏ qua {unit} chưa trọn vẹn, lấy {unit} hoàn chỉnh gần nhất "
+        f"làm giá trị hiện tại và {unit} liền trước làm `compare_value`; hoặc (b) so cùng số ngày đầu "
+        f"{unit} (ví dụ 5 ngày đầu {unit} này với 5 ngày đầu {unit} trước).\n"
+    )
 
 
 def pick_trend_columns(schema_info: dict) -> tuple[str | None, str | None, str | None]:

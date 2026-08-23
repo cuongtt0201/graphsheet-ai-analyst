@@ -45,14 +45,23 @@ LIMITS = {
     "kpi_label": 34,
     "kpi_value": 14,
     "kpi_note": 40,
+    "item_label": 34,
+    "item_value": 60,
+    "item_note": 60,
     "big_number": 12,
     "big_caption": 90,
     "body": 240,
 }
 MAX_BULLETS = 5
 MAX_KPIS = 4
+# compare puts items side by side and timeline stacks them; past four, columns
+# get too narrow to read and a timeline stops fitting the height.
+MAX_ITEMS = 4
 
-LAYOUTS = ("title", "section", "kpi", "chart", "chart_split", "bullets", "big_number", "closing")
+LAYOUTS = (
+    "title", "section", "kpi", "chart", "chart_split", "two_charts",
+    "bullets", "big_number", "quote", "compare", "timeline", "closing",
+)
 
 
 DECK_SCHEMA = {
@@ -98,6 +107,18 @@ DECK_SCHEMA = {
                     "big_value": {"type": "string"},
                     "big_caption": {"type": "string"},
                     "chart_index": {"type": "integer"},
+                    "chart_index_b": {"type": "integer"},
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string"},
+                                "value": {"type": "string"},
+                                "note": {"type": "string"},
+                            },
+                        },
+                    },
                 },
             },
         },
@@ -159,6 +180,29 @@ def _clamp_slide(raw: dict, n_charts: int) -> dict | None:
             return None
         slide["kpis"] = kpis
 
+    if layout in ("compare", "timeline"):
+        items = []
+        for entry in (raw.get("items") or [])[:MAX_ITEMS]:
+            if not isinstance(entry, dict):
+                continue
+            label = _clip(entry.get("label"), LIMITS["item_label"])
+            value = _clip(entry.get("value"), LIMITS["item_value"])
+            if not label and not value:
+                continue
+            item = {"label": label, "value": value}
+            if entry.get("note"):
+                item["note"] = _clip(entry["note"], LIMITS["item_note"])
+            items.append(item)
+        if len(items) < 2:
+            # One column is not a comparison and one date is not a timeline.
+            return None
+        slide["items"] = items
+
+    if layout == "quote":
+        # The sentence IS the slide, so there is nothing to show without it.
+        if not slide.get("takeaway"):
+            return None
+
     if layout == "big_number":
         value = _clip(raw.get("big_value"), LIMITS["big_number"])
         if not value:
@@ -166,7 +210,23 @@ def _clamp_slide(raw: dict, n_charts: int) -> dict | None:
         slide["big_value"] = value
         slide["big_caption"] = _clip(raw.get("big_caption"), LIMITS["big_caption"])
 
-    if layout in ("chart", "chart_split"):
+    if layout == "two_charts":
+        pair = [raw.get("chart_index"), raw.get("chart_index_b")]
+        valid = [i for i in pair if isinstance(i, int) and 0 <= i < n_charts]
+        if len(valid) == 2 and valid[0] != valid[1]:
+            slide["chart_index"], slide["chart_index_b"] = valid
+        elif valid:
+            # One good chart left: a single chart slide is a fair reading of
+            # what the model wanted, and better than half an empty comparison.
+            slide["layout"] = "chart"
+            slide["chart_index"] = valid[0]
+        elif bullets:
+            slide["layout"] = "bullets"
+            slide["bullets"] = bullets
+        else:
+            return None
+
+    if slide["layout"] in ("chart", "chart_split") and "chart_index" not in slide:
         idx = raw.get("chart_index")
         if not isinstance(idx, int) or not (0 <= idx < n_charts):
             # A chart slide with no chart is an empty box. Downgrade rather than
@@ -183,8 +243,8 @@ def _clamp_slide(raw: dict, n_charts: int) -> dict | None:
             slide["chart_index"] = idx
 
     # Every layout except the chart ones needs words to be worth a slide.
-    if slide["layout"] not in ("chart", "chart_split"):
-        has_content = any(slide.get(k) for k in ("heading", "takeaway", "bullets", "kpis", "big_value"))
+    if slide["layout"] not in ("chart", "chart_split", "two_charts"):
+        has_content = any(slide.get(k) for k in ("heading", "takeaway", "bullets", "kpis", "big_value", "items"))
         if not has_content:
             return None
     return slide
@@ -243,7 +303,14 @@ CÁC LOẠI SLIDE (`layout`):
 - kpi: 2-4 con số lớn (dùng `kpis`, mỗi mục có `label` + `value` đã định dạng sẵn như "2,02 tỷ", "68%").
 - chart: một biểu đồ chiếm trọn trang + một câu `takeaway`. Bắt buộc có `chart_index`.
 - chart_split: biểu đồ bên trái, `bullets` bên phải. Bắt buộc có `chart_index`.
+- two_charts: hai biểu đồ cạnh nhau để so sánh. Cần `chart_index` VÀ `chart_index_b`.
 - bullets: `heading` + tối đa {max_bullets} gạch đầu dòng.
+- quote: một câu ngắn đáng nhớ, chữ lớn giữa trang (dùng `takeaway`). Dùng khi
+  muốn nhấn một kết luận, không phải để nhắc lại số.
+- compare: hai đến bốn mục đặt cạnh nhau (dùng `items`, mỗi mục `label` +
+  `value` + `note` tuỳ chọn). Vd: Miền Bắc / Miền Trung / Miền Nam.
+- timeline: các mốc theo thứ tự thời gian (dùng `items`, `label` là mốc,
+  `value` là điều đã xảy ra).
 - big_number: một con số duy nhất gây ấn tượng (`big_value` + `big_caption`).
 - closing: đề xuất hành động, trang cuối.
 

@@ -230,6 +230,47 @@ def sanitize_kpis(kpis: list) -> list[str]:
     return notes
 
 
+def drop_incomplete_period(layout: dict, label: str | None) -> int:
+    """Remove the trailing data point for an unfinished period, in place.
+
+    A month with five days of data plotted beside nine full months draws a
+    cliff. The numbers are right and the picture is a lie -- and a reader
+    believes the picture, not the caption underneath explaining that the last
+    bar is short because the export stopped on the 5th.
+
+    Only the LAST point is considered, and only when its label matches the
+    period the date column says is unfinished. The chart title is marked so the
+    series is visibly shorter rather than quietly different, since dropping data
+    without saying so is its own kind of lie.
+
+    Returns how many charts were trimmed.
+    """
+    if not label:
+        return 0
+    charts = layout.get("charts")
+    if not isinstance(charts, list):
+        return 0
+
+    trimmed = 0
+    for chart in charts:
+        if not isinstance(chart, dict):
+            continue
+        rows = chart.get("data")
+        # Two points in, one point out is not a trend; leave it whole and let
+        # the caption carry the caveat.
+        if not isinstance(rows, list) or len(rows) < 3:
+            continue
+        last = rows[-1]
+        if not isinstance(last, dict) or str(last.get("label") or "") != label:
+            continue
+        chart["data"] = rows[:-1]
+        title = str(chart.get("title") or "").strip()
+        if title and "chưa trọn" not in title:
+            chart["title"] = f"{title} (bỏ {label} — kỳ chưa trọn)"
+        trimmed += 1
+    return trimmed
+
+
 def condense_layout(layout: dict) -> None:
     """Cap over-dense charts in a dashboard layout, in place.
 

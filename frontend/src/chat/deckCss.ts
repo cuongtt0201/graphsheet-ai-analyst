@@ -281,4 +281,137 @@ body {
   .slide { border-radius: 0; box-shadow: none; page-break-after: always; }
   .slide[hidden] { display: flex !important; }
 }
+
+/* ── Layouts added later ────────────────────────────────────────────────
+   Same rules as everything above: grid/flex only, type in cqi with clamp()
+   floors and ceilings, and a line-clamp wherever Vietnamese could still
+   outgrow its box. */
+
+/* two_charts: equal halves, each free to shrink. */
+.slide__pair {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2.4cqi;
+}
+
+/* quote: the sentence is the slide. */
+.slide__body--quote { justify-content: center; }
+.slide__quote {
+  margin: 0;
+  font-size: clamp(16px, 4.2cqi, 42px);
+  line-height: 1.28;
+  font-weight: 700;
+  color: #f8fafc;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+.slide__quote::before {
+  content: "C";
+  color: #10b981;
+  margin-right: 0.15em;
+}
+.slide__quote-by {
+  margin: 1.4cqi 0 0;
+  font-size: clamp(9px, 1.7cqi, 17px);
+  color: #94a3b8;
+}
+
+/* compare: auto-fit, so two columns are wide and four are narrow without a
+   rule per count. */
+.slide__cols {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 2.4cqi;
+  align-content: center;
+}
+.slide__col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9cqi;
+  min-width: 0;
+  padding: 2.2cqi 1.8cqi;
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.1);
+  border-top: 3px solid #2563eb;
+}
+.slide__col-label {
+  font-size: clamp(9px, 1.7cqi, 17px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  text-transform: uppercase;
+}
+.slide__col-value {
+  font-size: clamp(15px, 3.6cqi, 36px);
+  font-weight: 800;
+  line-height: 1.1;
+  color: #f8fafc;
+  overflow-wrap: anywhere;
+}
+.slide__col-note {
+  font-size: clamp(8px, 1.5cqi, 15px);
+  line-height: 1.4;
+  color: #cbd5e1;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+/* timeline: a rail down the left, milestones hanging off it. */
+.slide__steps {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0 0 0 3cqi;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2cqi;
+  border-left: 2px solid rgba(16, 185, 129, 0.35);
+}
+.slide__step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4cqi;
+  min-width: 0;
+}
+.slide__step::before {
+  content: "";
+  position: absolute;
+  left: -3.55cqi;
+  top: 0.55em;
+  width: 1.1cqi;
+  height: 1.1cqi;
+  border-radius: 50%;
+  background: #10b981;
+}
+.slide__step-label {
+  font-size: clamp(8px, 1.5cqi, 15px);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #10b981;
+  text-transform: uppercase;
+}
+.slide__step-value {
+  font-size: clamp(11px, 2.1cqi, 21px);
+  line-height: 1.35;
+  color: #f8fafc;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.slide__step-note {
+  font-size: clamp(8px, 1.4cqi, 14px);
+  color: #94a3b8;
+}
 `;

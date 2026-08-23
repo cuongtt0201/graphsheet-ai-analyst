@@ -494,3 +494,75 @@ def test_a_comparison_baseline_reaches_the_prompt_when_the_dashboard_computed_on
     assert "4.475.576.864" in text
     assert "CẤM SO SÁNH VỚI KỲ TRƯỚC" in DECK_PROMPT
     assert "CẤM DỰ BÁO" in DECK_PROMPT
+
+
+def test_two_charts_needs_two_distinct_charts_or_it_becomes_one():
+    """Half a comparison is worse than the single chart the model had."""
+    deck = clamp_deck({"title": "x", "slides": [
+        {"layout": "two_charts", "chart_index": 0, "chart_index_b": 1, "heading": "Đủ hai"},
+        {"layout": "two_charts", "chart_index": 0, "chart_index_b": 99, "heading": "Thiếu một"},
+        {"layout": "two_charts", "chart_index": 1, "chart_index_b": 1, "heading": "Trùng nhau"},
+        {"layout": "two_charts", "chart_index": 99, "chart_index_b": 99, "bullets": ["Còn chữ"]},
+        {"layout": "two_charts", "chart_index": 99, "chart_index_b": 99},
+    ]}, n_charts=2)
+
+    assert [s["layout"] for s in deck["slides"]] == ["two_charts", "chart", "chart", "bullets"]
+    assert deck["slides"][0]["chart_index_b"] == 1
+    assert deck["slides"][2]["chart_index"] == 1
+    assert deck["dropped"] == 1
+
+
+def test_a_quote_slide_without_the_quote_is_nothing():
+    deck = clamp_deck({"title": "x", "slides": [
+        {"layout": "quote", "takeaway": "Miền Bắc dẫn đầu ba miền."},
+        {"layout": "quote", "heading": "Chỉ có tiêu đề"},
+    ]}, n_charts=0)
+
+    assert len(deck["slides"]) == 1
+    assert deck["slides"][0]["takeaway"] == "Miền Bắc dẫn đầu ba miền."
+
+
+def test_compare_and_timeline_need_at_least_two_entries():
+    """One column is not a comparison and one date is not a timeline."""
+    deck = clamp_deck({"title": "x", "slides": [
+        {"layout": "compare", "items": [{"label": "Bắc", "value": "11,4 tỷ"}, {"label": "Nam", "value": "10,8 tỷ"}]},
+        {"layout": "compare", "items": [{"label": "Một mình", "value": "1"}]},
+        {"layout": "timeline", "items": [{"label": "05/2025", "value": "Bắt đầu"}, {"label": "01/2026", "value": "Đỉnh"}]},
+        {"layout": "timeline", "items": []},
+    ]}, n_charts=0)
+
+    assert [s["layout"] for s in deck["slides"]] == ["compare", "timeline"]
+    assert len(deck["slides"][0]["items"]) == 2
+
+
+def test_item_text_is_clamped_like_every_other_field():
+    from app.agent.slides import LIMITS, MAX_ITEMS
+
+    deck = clamp_deck({"title": "x", "slides": [{
+        "layout": "compare",
+        "items": [{"label": "L" * 200, "value": "V" * 200, "note": "N" * 200}] * 9,
+    }]}, n_charts=0)
+
+    items = deck["slides"][0]["items"]
+    assert len(items) == MAX_ITEMS
+    assert all(len(i["label"]) <= LIMITS["item_label"] for i in items)
+    assert all(len(i["value"]) <= LIMITS["item_value"] for i in items)
+    assert all(len(i["note"]) <= LIMITS["item_note"] for i in items)
+
+
+def test_every_layout_the_backend_offers_is_one_the_renderer_draws():
+    """A layout the model can pick but the browser cannot draw renders blank."""
+    import re
+    from pathlib import Path
+    from app.agent.slides import LAYOUTS
+
+    src = Path(__file__).resolve().parents[2] / "frontend" / "src" / "chat" / "deckHtml.ts"
+    if not src.exists():
+        import pytest
+        pytest.skip("frontend source not available")
+    body = src.read_text(encoding="utf-8")
+
+    handled = set(re.findall(r'case "([a-z_]+)":', body))
+    missing = [l for l in LAYOUTS if l not in handled]
+    # "bullets" is the default branch rather than a case label.
+    assert missing == ["bullets"], f"renderer has no branch for: {missing}"

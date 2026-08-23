@@ -86,6 +86,36 @@ function slideBody(slide: DeckSlide, charts: ChartSpec[]): string {
           ${bulletList(slide.bullets, "slide__bullets")}
         </div>${takeaway}</div>`;
 
+    case "two_charts": {
+      const b = slide.chart_index_b != null ? charts[slide.chart_index_b] : undefined;
+      return `<div class="slide__body">${heading}
+        <div class="slide__pair">
+          <div class="slide__chart">${chartSvg(chart)}</div>
+          <div class="slide__chart">${chartSvg(b)}</div>
+        </div>${takeaway}</div>`;
+    }
+
+    case "quote":
+      return `<div class="slide__body slide__body--quote">
+        ${kicker}<p class="slide__quote">${esc(slide.takeaway)}</p>
+        ${slide.heading ? `<p class="slide__quote-by">${esc(slide.heading)}</p>` : ""}</div>`;
+
+    case "compare": {
+      const cols = (slide.items ?? []).map((it) => `<div class="slide__col">
+        <span class="slide__col-label">${esc(it.label)}</span>
+        <span class="slide__col-value">${esc(it.value)}</span>
+        ${it.note ? `<span class="slide__col-note">${esc(it.note)}</span>` : ""}</div>`).join("");
+      return `<div class="slide__body">${heading}<div class="slide__cols">${cols}</div>${takeaway}</div>`;
+    }
+
+    case "timeline": {
+      const steps = (slide.items ?? []).map((it) => `<li class="slide__step">
+        <span class="slide__step-label">${esc(it.label)}</span>
+        <span class="slide__step-value">${esc(it.value)}</span>
+        ${it.note ? `<span class="slide__step-note">${esc(it.note)}</span>` : ""}</li>`).join("");
+      return `<div class="slide__body">${heading}<ol class="slide__steps">${steps}</ol>${takeaway}</div>`;
+    }
+
     case "closing":
       return `<div class="slide__body slide__body--closing">
         <h2 class="slide__heading">${esc(slide.heading || "Đề xuất hành động")}</h2>

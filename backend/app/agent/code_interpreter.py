@@ -506,6 +506,24 @@ Always include date/time columns if the query implies trends.
     # series can never reach the UI even if the model ignored the prompt rules.
     condense_layout(layout)
 
+    # And drop the trailing point when the last period is unfinished. The prompt
+    # already warns the model about this and the model does obey it in prose --
+    # but the chart it wrote still plotted five days of a month next to nine full
+    # ones, so the caption said "growth" above a cliff. The picture wins that
+    # argument with the reader, so the fix has to reach the picture.
+    from app.agent.chart_utils import drop_incomplete_period
+    from app.data.trends import incomplete_last_period
+
+    _cleaned = state.get("cleaned_df")
+    if _cleaned is not None and _date_col:
+        _found = incomplete_last_period(_cleaned, _date_col)
+        if _found:
+            _trimmed = drop_incomplete_period(layout, _found[0])
+            if _trimmed:
+                yield {"type": "step",
+                       "message": f"✂️ Bỏ kỳ {_found[0]} khỏi {_trimmed} biểu đồ "
+                                  f"(mới có ~{_found[1] * 100:.0f}% số ngày, vẽ vào sẽ thành sụt giả)."}
+
     # Deterministic guard on the comparisons: the prompt asks the model not to
     # compare an all-time total against one month, but it has done exactly that
     # ("25,3 tỷ ▲389% so với tháng trước"), so the check cannot live only in

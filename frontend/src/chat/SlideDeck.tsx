@@ -4,7 +4,9 @@ import { buildDeckHtml } from "./deckHtml";
 import { DECK_CSS } from "./deckCss";
 
 export interface DeckSlide {
-  layout: "title" | "section" | "kpi" | "chart" | "chart_split" | "bullets" | "big_number" | "closing";
+  layout:
+    | "title" | "section" | "kpi" | "chart" | "chart_split" | "two_charts"
+    | "bullets" | "big_number" | "quote" | "compare" | "timeline" | "closing";
   kicker?: string;
   heading?: string;
   takeaway?: string;
@@ -13,6 +15,9 @@ export interface DeckSlide {
   big_value?: string;
   big_caption?: string;
   chart_index?: number;
+  chart_index_b?: number;
+  /** compare: columns side by side. timeline: milestones in order. */
+  items?: { label: string; value: string; note?: string }[];
 }
 
 export interface Deck {

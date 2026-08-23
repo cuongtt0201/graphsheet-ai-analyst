@@ -172,9 +172,10 @@ def refilter(request: Request, body: dict):
     Sync (not async): sandbox execution blocks, so FastAPI runs it in the
     threadpool and keeps the event loop free.
     """
-    from app.agent.chart_utils import condense_layout
+    from app.agent.chart_utils import condense_layout, drop_incomplete_period
     from app.agent.dashboard_filter import apply_filters
     from app.agent.sandbox import run_layout_script
+    from app.data.trends import incomplete_last_period, pick_trend_columns
 
     state = get_state(request)
     script = state.get("layout_script")
@@ -215,6 +216,16 @@ def refilter(request: Request, body: dict):
         value = layout.get(key)
         layout[key] = [i for i in value if isinstance(i, dict)] if isinstance(value, list) else []
     condense_layout(layout)
+
+    # The filtered layout must get the same treatment as the built one, or
+    # applying a filter would put the cliff back.
+    date_col, _, _ = pick_trend_columns(state.get("cleaned_schema") or {})
+    filtered_df = state.get("cleaned_df")
+    if filtered_df is not None and date_col:
+        found = incomplete_last_period(filtered_df, date_col)
+        if found:
+            drop_incomplete_period(layout, found[0])
+
     for k in layout["kpis"]:
         k["status"] = "ok"
     for c in layout["charts"]:
