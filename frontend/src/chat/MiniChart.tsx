@@ -1,5 +1,10 @@
+import React from "react";
 import type { ChartSpec } from "../api";
-import VegaChart from "./VegaChart";
+
+// vega-embed is ~1.2 MB and only 1 of the 25 chart types needs it. Imported
+// statically it rode into the entry chunk, so every page load paid for it
+// whether or not a Vega chart was ever rendered.
+const VegaChart = React.lazy(() => import("./VegaChart"));
 
 /** Compact number label for chart values: 25.3 tỷ / 12.4 tr / 8.5k / 320. */
 function fmtCompact(v: number): string {
@@ -724,7 +729,9 @@ function renderChart({ spec, showTitle = true }: { spec: ChartSpec; showTitle?: 
     return (
       <figure className="mini-chart" style={{ padding: "0.5rem" }}>
         {showTitle && <figcaption>{title}</figcaption>}
-        <VegaChart spec={spec.vegaLiteSpec} />
+        <React.Suspense fallback={<div className="mini-chart__loading">Đang nạp biểu đồ…</div>}>
+          <VegaChart spec={spec.vegaLiteSpec} />
+        </React.Suspense>
       </figure>
     );
   }

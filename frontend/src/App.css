@@ -3625,3 +3625,11 @@ textarea {
   max-height: 30vh;
   overflow-y: auto;
 }
+
+/* Placeholder while the Vega bundle streams in on first use. */
+.mini-chart__loading {
+  padding: 1.5rem;
+  text-align: center;
+  font-size: 0.82rem;
+  color: #8b949e;
+}
