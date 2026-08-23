@@ -83,8 +83,9 @@ def read_raw_grids(filename: str, content: bytes) -> dict[str, dict]:
 
 def read_single_sheet_raw(filename: str, content: bytes, sheet: str) -> pd.DataFrame | None:
     """Return ONE sheet's raw grid (header=None, dtype=object) from the original
-    file bytes — the full data, not the row-capped display grid. Used by the
-    header-override reparse so a big sheet keeps all its rows."""
+    file bytes — the full data, not the row-capped display grid. Used when the
+    LLM proposes a different header row than the heuristic chose, so a big sheet
+    keeps all its rows."""
     if filename.lower().endswith(".csv"):
         return pd.read_csv(io.BytesIO(content), header=None, dtype=object)
     raw = pd.read_excel(io.BytesIO(content), sheet_name=sheet, header=None, dtype=object, engine="calamine")

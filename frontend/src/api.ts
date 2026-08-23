@@ -648,13 +648,6 @@ export const api = {
       body: JSON.stringify({ prompt, source_id }),
     }),
 
-  /** Re-parse one sheet using a user-chosen header row (0-based into the raw grid). */
-  reparse: (source_id: string, header_row: number) =>
-    request<{ source_id: string; profile: FileProfile }>("/api/reparse", {
-      method: "POST",
-      body: JSON.stringify({ source_id, header_row }),
-    }),
-
   /** Whatever is pinned to the Dashboard tab, persisted server-side so it
    * survives a page refresh (not just the auto-build flow's result). */
   getDashboardItems: () => request<{ items: any[] }>("/api/dashboard/items"),

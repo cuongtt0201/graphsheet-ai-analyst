@@ -316,10 +316,10 @@ def smart_read_grid(raw_df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
 
 def read_grid_with_header(raw_df: pd.DataFrame, header_row: int) -> pd.DataFrame:
-    """Re-parse a raw sheet grid using a USER-chosen header row (0-based index
-    into the original grid). Powers the 'sửa dòng tiêu đề' override — no
-    detection, just honour the human's pick. Column trim + blank/total-row
-    cleanup still apply."""
+    """Re-parse a raw sheet grid using a GIVEN header row (0-based index into
+    the original grid) — no detection, just honour the row it is handed. Used
+    when the LLM confirmation pass overrides an unsure heuristic guess. Column
+    trim + blank/total-row cleanup still apply."""
     if raw_df.empty:
         return pd.DataFrame()
     filled = raw_df.replace(r"^\s*$", None, regex=True)

@@ -442,64 +442,6 @@ async def sheet(request: Request, body: dict):
     return {"source_id": sid, "grid": grid["grid"], "derived": False}
 
 
-@router.post("/reparse")
-def reparse_sheet(request: Request, body: dict):
-    """Re-read ONE sheet using a user-chosen header row (0-based, into the raw
-    sheet grid the frontend renders). Powers the 'sửa dòng tiêu đề' override so
-    the human always wins when auto-detection guessed wrong. Sync: pandas work
-    is blocking; runs in the threadpool."""
-    from app.data.profiling import read_single_sheet_raw, profile_dataframe, _grid_from_df
-    from app.data.profiler import clean_and_profile
-    from app.data.smart_read import read_grid_with_header
-
-    state = get_state(request)
-    source_id = body.get("source_id") or ""
-    header_row = body.get("header_row")
-    if header_row is None:
-        raise HTTPException(400, "Thiếu header_row.")
-
-    profiles = state.get("profiles") or []
-    prof = next((p for p in profiles if p.get("source_id") == source_id), None)
-    if prof is None:
-        raise HTTPException(404, "Không tìm thấy bảng này trong phiên.")
-
-    filename, sheet = prof["filename"], prof["sheet"]
-    raw_files = state.get("raw_files") or {}
-    content = raw_files.get(filename)
-    if not isinstance(content, (bytes, bytearray)):
-        raise HTTPException(400, "Không còn dữ liệu gốc của file để phân tích lại (hãy tải lại file).")
-
-    raw_df = read_single_sheet_raw(filename, bytes(content), sheet)
-    if raw_df is None:
-        raise HTTPException(400, "Không đọc lại được sheet.")
-
-    df = read_grid_with_header(raw_df, int(header_row))
-    cleaned, profile = clean_and_profile(df)
-    profile["detection"] = {"header_row": int(header_row), "confidence": 1.0,
-                            "totals_dropped": 0, "low_confidence": False, "manual": True}
-    new_prof = profile_dataframe(filename, sheet, cleaned, profile)
-    # Preserve display fields the grid relies on.
-    new_prof["grid"] = None
-    new_prof["grid_rows"] = prof.get("grid_rows", len(cleaned))
-    new_prof["has_data"] = len(cleaned) > 0
-
-    # Swap the dataframe + profile in place; a prior merged view is now stale.
-    dataframes = dict(state.get("dataframes") or {})
-    dataframes[source_id] = cleaned
-    state["dataframes"] = dataframes
-
-    # Reparsing re-reads the file, so any copilot column is gone from the
-    # dataframe. Leaving its derived grid behind would keep showing a column the
-    # analysis no longer has.
-    derived = dict(state.get("derived_grids") or {})
-    if derived.pop(source_id, None) is not None:
-        state["derived_grids"] = derived
-    state["profiles"] = [new_prof if p.get("source_id") == source_id else p for p in profiles]
-    state.pop("cleaned_df", None)
-
-    return {"source_id": source_id, "profile": new_prof}
-
-
 def _to_native(value):
     return value.item() if hasattr(value, "item") else value
 

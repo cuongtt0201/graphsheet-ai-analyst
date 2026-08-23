@@ -524,11 +524,11 @@ def _persist_copilot_result(
     state["dataframes"] = {**dfs, source_id: new_df}
 
     # raw_grids stays untouched: it is defined as the faithful "what the file
-    # actually looks like" view -- no cleaning, no coercion, no header inference
-    # -- and the header-row override reparses against it. A computed column is
-    # not part of the file. The edited grid is a DERIVED view, so it gets its
-    # own key; /api/sheet prefers it, which is what makes the column survive a
-    # refresh without either structure having to lie about what it holds.
+    # actually looks like" view -- no cleaning, no coercion, no header inference.
+    # A computed column is not part of the file. The edited grid is a DERIVED
+    # view, so it gets its own key; /api/sheet prefers it, which is what makes
+    # the column survive a refresh without either structure having to lie about
+    # what it holds.
     derived = dict(state.get("derived_grids") or {})
     derived[source_id] = {"grid": grid}
     state["derived_grids"] = derived

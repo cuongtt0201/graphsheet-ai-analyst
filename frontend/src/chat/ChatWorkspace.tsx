@@ -1471,43 +1471,6 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
     }
   }
 
-  // --- Header-row override: re-parse a sheet when auto-detection guessed wrong ---
-  const [editingHeader, setEditingHeader] = useState(false);
-  const [headerRowInput, setHeaderRowInput] = useState("");
-  const [reparsing, setReparsing] = useState(false);
-
-  async function handleReparse(sourceId: string, oneBasedRow: number) {
-    if (reparsing || !Number.isFinite(oneBasedRow) || oneBasedRow < 1) return;
-    setReparsing(true);
-    try {
-      const res = await api.reparse(sourceId, oneBasedRow - 1); // grid is 0-based
-      setTables((prev) => prev.map((t) => (t.source_id === sourceId ? res.profile : t)));
-      // Reparsing re-reads the file, so the server dropped any copilot column.
-      // Drop the cached derived grid too, then reload the raw one.
-      setCopilotGridKeys((prev) => {
-        if (!prev[sourceId]) return prev;
-        const next = { ...prev };
-        delete next[sourceId];
-        return next;
-      });
-      setGridCache((c) => {
-        const next = { ...c };
-        delete next[sourceId];
-        return next;
-      });
-      selectSheet(sourceId);
-      setEditingHeader(false);
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", text: `✅ Đã đặt dòng ${oneBasedRow} làm tiêu đề cho "${res.profile.sheet}". Cột nhận diện: ${res.profile.columns.join(", ")}` },
-      ]);
-    } catch (e) {
-      alert(`Không phân tích lại được: ${(e as Error).message}`);
-    } finally {
-      setReparsing(false);
-    }
-  }
-
   // Fire-and-forget: the Dashboard tab is a nice-to-have to restore, not
   // worth blocking the UI or surfacing errors over.
   /** Re-runs the stored pandas script on the filtered subset and swaps the
@@ -2206,48 +2169,6 @@ function isExecutiveReportRequest(query: string): boolean {
               ))}
             </div>
             <div className="sheet-body" style={{ display: "flex", flexDirection: "column" }}>
-              {/* Header-detection banner: show what row the AI treated as the
-                  header, and let the user correct it when the file is messy. */}
-              {(() => {
-                const t = tables.find((p) => p.source_id === activeKey);
-                const det = t?.detection;
-                if (!t || !det) return null;
-                const row1 = (det.header_row ?? 0) + 1;
-                const uncertain = det.low_confidence && !det.manual;
-                return (
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", padding: "0.4rem 1rem", fontSize: "0.82rem", background: uncertain ? "#fff7ed" : "#f3f9f6", borderBottom: "1px solid #e1e7e4", color: "#3d4d45" }}>
-                    <span>
-                      {uncertain ? "⚠️" : "🧠"} Tiêu đề nhận diện ở <strong>dòng {row1}</strong>
-                      {det.two_level_header ? ` + dòng ${row1 + 1} (tiêu đề 2 tầng, đã ghép tên cột)` : ""}
-                      {det.manual ? " (bạn đã chọn)" : ""}
-                      {det.totals_dropped > 0 ? ` · đã bỏ ${det.totals_dropped} dòng tổng` : ""}
-                      {uncertain ? " · AI chưa chắc chắn" : ""}
-                    </span>
-                    {!editingHeader ? (
-                      <button className="button button--small button--secondary" onClick={() => { setEditingHeader(true); setHeaderRowInput(String(row1)); }}>
-                        ✏️ Sửa dòng tiêu đề
-                      </button>
-                    ) : (
-                      <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        Dòng tiêu đề:
-                        <input
-                          type="number"
-                          min={1}
-                          value={headerRowInput}
-                          onChange={(e) => setHeaderRowInput(e.target.value)}
-                          style={{ width: "64px", padding: "2px 6px", borderRadius: "6px", border: "1px solid #cbd5d0" }}
-                        />
-                        <button className="button button--small button--primary" disabled={reparsing} onClick={() => handleReparse(t.source_id, parseInt(headerRowInput, 10))}>
-                          {reparsing ? "..." : "Áp dụng"}
-                        </button>
-                        <button className="button button--small button--secondary" disabled={reparsing} onClick={() => setEditingHeader(false)}>
-                          Hủy
-                        </button>
-                      </span>
-                    )}
-                  </div>
-                );
-              })()}
               {(() => {
                 // What the data means + deterministic quality warnings. The
                 // profiler has always computed `flags`; until now they were
