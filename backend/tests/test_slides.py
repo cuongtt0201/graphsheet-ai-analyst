@@ -335,3 +335,162 @@ def test_the_cap_counts_kept_slides_not_examined_ones():
 
     assert len(deck["slides"]) == MAX_SLIDES
     assert deck["dropped"] == 30
+
+
+def test_a_chart_that_cannot_be_drawn_is_not_offered_to_the_model():
+    """A slide framing an empty chart is worse than no slide.
+
+    MiniChart refuses per type -- scatter needs points, grouped-bar needs
+    series, and so on -- so a chart missing its own required field renders as
+    "Không đủ dữ liệu để vẽ biểu đồ này" under a heading confidently describing
+    a trend. Such charts are dropped before the model can reference one.
+    """
+    from app.agent.slides import is_renderable
+
+    good = {"type": "bar", "title": "Doanh thu", "labels": ["B"], "values": [1]}
+    empty = {"type": "bar", "title": "Rỗng", "labels": [], "values": []}
+    wrong_shape = {"type": "grouped-bar", "title": "Sai kiểu", "labels": ["B"], "values": [1]}
+
+    assert is_renderable(good)
+    assert not is_renderable(empty)
+    # Values alone are not enough for a type whose renderer reads `series`.
+    assert not is_renderable(wrong_shape)
+
+    captured = {}
+
+    def capture(prompt, schema, **kw):
+        captured["prompt"] = prompt
+        return {"title": "D", "slides": [
+            {"layout": "title", "heading": "A"},
+            {"layout": "chart", "chart_index": 0, "takeaway": "K"},
+        ]}
+
+    res = build_deck("tạo slide", kpis=[{"title": "T", "value": "1"}],
+                     charts=[empty, good, wrong_shape], call_ai_fn=capture)
+
+    # Only the drawable chart is listed, and it is index 0.
+    assert "[0] Doanh thu" in captured["prompt"]
+    assert "Rỗng" not in captured["prompt"]
+    assert "Sai kiểu" not in captured["prompt"]
+    assert res["deck"]["charts"] == [good]
+    assert res["deck"]["slides"][1]["chart_index"] == 0
+
+
+def test_filtering_happens_before_indices_are_assigned():
+    """Filtering after the fact would shift indices out from under the model."""
+    a = {"type": "bar", "title": "Một", "labels": ["x"], "values": [1]}
+    dud = {"type": "bar", "title": "Hỏng", "values": []}
+    b = {"type": "bar", "title": "Hai", "labels": ["y"], "values": [2]}
+
+    mock = MagicMock(return_value={"title": "D", "slides": [
+        {"layout": "chart", "chart_index": 0, "takeaway": "K1"},
+        {"layout": "chart", "chart_index": 1, "takeaway": "K2"},
+    ]})
+    res = build_deck("tạo slide", kpis=[], charts=[a, dud, b], call_ai_fn=mock)
+
+    assert [c["title"] for c in res["deck"]["charts"]] == ["Một", "Hai"]
+    assert res["deck"]["charts"][1]["title"] == "Hai"
+
+
+def test_no_usable_chart_and_no_kpi_is_refused():
+    res = build_deck("tạo slide", kpis=[], charts=[{"type": "bar", "values": []}])
+    assert res["ok"] is False
+    assert "biểu đồ" in res["error"]
+
+
+def test_the_backend_requirements_match_what_the_renderer_checks():
+    """These two lists sit in different languages and must not drift apart.
+
+    MiniChart returns null -- and the slide shows an empty frame -- for exactly
+    these type/field pairs.
+    """
+    from pathlib import Path
+    from app.agent.slides import _CHART_REQUIREMENTS
+
+    src = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "chat" / "MiniChart.tsx")
+    if not src.exists():
+        import pytest
+        pytest.skip("frontend source not available")
+    body = src.read_text(encoding="utf-8")
+
+    for chart_type, field in _CHART_REQUIREMENTS.items():
+        assert f'"{chart_type}"' in body, f"{chart_type} is no longer a MiniChart type"
+        if field != "vegaLiteSpec":
+            assert f"!{field}?.length" in body or f"{field}?.length" in body, (
+                f"{chart_type} claims to need {field}, which MiniChart no longer checks"
+            )
+
+
+def test_dashboard_charts_are_normalized_before_anything_reads_them():
+    """The auto-dashboard and the renderer disagree on chart shape.
+
+    The dashboard emits {title, type, data: [{label, value}]}; MiniChart reads
+    {labels, values}. The browser bridges them in layoutChartToSpec, but the
+    deck is planned server-side and never went through it -- so a chart full of
+    data looked empty, was described to the model as having none, and reached a
+    slide as a blank frame under a confident heading.
+    """
+    from app.agent.slides import is_renderable, normalize_chart
+
+    raw = {
+        "title": "Xu hướng doanh thu theo tháng",
+        "type": "line",
+        "role": "trend",
+        "data": [{"label": "2025-05", "value": 913883329.0}, {"label": "2025-06", "value": 1166601453.0}],
+    }
+    assert not is_renderable(raw)          # the shape the bug saw
+    norm = normalize_chart(raw)
+    assert is_renderable(norm)             # the same chart, read correctly
+    assert norm["labels"] == ["2025-05", "2025-06"]
+    assert norm["values"] == [913883329.0, 1166601453.0]
+
+
+def test_build_deck_normalizes_and_then_describes_the_real_data():
+    captured = {}
+
+    def capture(prompt, schema, **kw):
+        captured["prompt"] = prompt
+        return {"title": "D", "slides": [
+            {"layout": "title", "heading": "A"},
+            {"layout": "chart", "chart_index": 0, "takeaway": "K"},
+        ]}
+
+    charts = [{"title": "Theo tháng", "type": "line",
+               "data": [{"label": "2025-05", "value": 100}, {"label": "2025-06", "value": 200}]}]
+    res = build_deck("tạo slide", kpis=[], charts=charts, call_ai_fn=capture)
+
+    assert "2025-05=100" in captured["prompt"]
+    assert res["ok"] is True
+    assert res["deck"]["charts"][0]["values"] == [100, 200]
+
+
+def test_small_kpi_numbers_are_not_dropped_from_the_prompt():
+    """fmt_vi_compact returns "" below a million by design. Used alone it left
+    a count of 53.799 as an empty string, so the model was shown a KPI with no
+    value and wrote whatever it liked."""
+    from app.agent.slides import _fmt_kpis
+
+    text = _fmt_kpis([
+        {"name": "Tổng doanh thu", "value": 5168825563.0},
+        {"name": "Số hóa đơn", "value": 53799},
+        {"name": "AOV", "value": 96076.61},
+    ])
+
+    assert "53.799" in text
+    assert "96.076,61" in text
+    # Large numbers keep both the exact figure and the readable magnitude.
+    assert "5.168.825.563" in text and "5,2 tỷ" in text
+    assert not any(line.rstrip().endswith(":") for line in text.splitlines())
+
+
+def test_a_comparison_baseline_reaches_the_prompt_when_the_dashboard_computed_one():
+    """Without this the model has no grounded way to say "so với kỳ trước" --
+    and the prompt forbids inventing one."""
+    from app.agent.slides import DECK_PROMPT, _fmt_kpis
+
+    text = _fmt_kpis([{"name": "Doanh thu", "value": 5_168_825_563.0,
+                       "compare_value": 4_475_576_864.0, "compare_label": "tháng trước"}])
+    assert "so với tháng trước" in text
+    assert "4.475.576.864" in text
+    assert "CẤM SO SÁNH VỚI KỲ TRƯỚC" in DECK_PROMPT
+    assert "CẤM DỰ BÁO" in DECK_PROMPT

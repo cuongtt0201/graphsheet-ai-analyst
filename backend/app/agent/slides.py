@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+from app.agent.number_format import NUMBER_STYLE_RULES
 from app.ai.pool import call_ai, progress_emit
 
 logger = logging.getLogger(__name__)
@@ -255,6 +256,12 @@ CÁCH DỰNG:
 4. `takeaway` là điều người xem phải nhớ, KHÔNG phải mô tả lại biểu đồ.
    Sai: "Biểu đồ thể hiện doanh thu theo miền."
    Đúng: "Miền Bắc dẫn đầu nhưng khoảng cách ba miền chỉ 15%."
+5. CẤM DỰ BÁO. Chỉ nói về những gì số liệu ĐÃ đo được. Không viết "dự kiến
+   tiếp tục tăng", "sẽ đạt", "xu hướng sắp tới" — dữ liệu trên không chứa
+   tương lai, và một câu như vậy nghe như kết luận từ số liệu trong khi không
+   phải.
+6. CẤM SO SÁNH VỚI KỲ TRƯỚC nếu phần số liệu ở trên không có sẵn con số so
+   sánh đó. Không có mốc thời gian thì không có "so với kỳ trước".
 
 GIỚI HẠN CHỮ — viết vượt là bị cắt cụt, nên hãy viết trong giới hạn:
 - heading ≤ {heading} ký tự
@@ -262,7 +269,68 @@ GIỚI HẠN CHỮ — viết vượt là bị cắt cụt, nên hãy viết tro
 - takeaway ≤ {takeaway} ký tự
 - nhãn chỉ số ≤ {kpi_label} ký tự, giá trị ≤ {kpi_value} ký tự (định dạng sẵn: "2,02 tỷ", "68%")
 
+{number_style_rules}
+
 Viết tiếng Việt, giọng trình bày cho lãnh đạo. Trả về DUY NHẤT JSON đúng schema."""
+
+
+# What each chart type needs before MiniChart will draw it. Mirrored from the
+# renderer on purpose: offering the model a chart the browser then refuses is
+# how a slide ends up as an empty frame with a caption underneath explaining a
+# trend nobody can see.
+_CHART_REQUIREMENTS = {
+    "scatter": "points",
+    "bubble": "points",
+    "heatmap": "matrix",
+    "stacked-bar": "series",
+    "grouped-bar": "series",
+    "multi-line": "series",
+    "stacked-area": "series",
+    "combo": "series",
+    "radar": "series",
+    "vega": "vegaLiteSpec",
+}
+
+
+def normalize_chart(chart: Any) -> dict:
+    """Put a dashboard chart into the shape the renderer reads.
+
+    The auto-dashboard emits {title, type, data: [{label, value}]}; MiniChart
+    reads {labels, values}. The browser converts between them in
+    layoutChartToSpec, but the deck is planned server-side and never passed
+    through it -- so every chart arrived looking empty, the prompt listed them
+    with no data, and the slides framed blank boxes under confident headings.
+    Mirrors layoutChartToSpec deliberately; the two must agree.
+    """
+    if not isinstance(chart, dict):
+        return {}
+
+    out = dict(chart)
+    if chart.get("type") == "vega" and chart.get("vegaLiteSpec"):
+        out.setdefault("labels", [])
+        out.setdefault("values", [])
+        return out
+
+    rows = chart.get("data") or []
+    if not chart.get("labels") and rows:
+        out["labels"] = [r.get("label") for r in rows if isinstance(r, dict)]
+    if not chart.get("values") and rows:
+        out["values"] = [r.get("value") for r in rows if isinstance(r, dict)]
+    out.setdefault("type", "bar")
+    return out
+
+
+def is_renderable(chart: Any) -> bool:
+    """True when this chart carries the data its own type requires."""
+    if not isinstance(chart, dict):
+        return False
+    required = _CHART_REQUIREMENTS.get(str(chart.get("type") or "").strip())
+    if required:
+        payload = chart.get(required)
+        return bool(payload)
+    # Everything else -- bar, line, pie, donut, gauge, bullet, progress -- draws
+    # from `values`.
+    return bool(chart.get("values"))
 
 
 def _emit(event: dict) -> None:
@@ -274,10 +342,23 @@ def _emit(event: dict) -> None:
 def _fmt_kpis(kpis: list[dict]) -> str:
     if not kpis:
         return "(không có)"
-    return "\n".join(
-        f"- {k.get('title') or k.get('name') or 'Chỉ số'}: {k.get('value') if k.get('value') is not None else k.get('scalar')}"
-        for k in kpis
-    )
+    from app.agent.number_format import describe
+
+    lines = []
+    for k in kpis:
+        name = k.get("title") or k.get("name") or "Chỉ số"
+        raw = k.get("value") if k.get("value") is not None else k.get("scalar")
+        # describe() gives the exact value AND the readable magnitude, both
+        # grounded, so the model may use either. The compact form alone
+        # returns "" below a million, dropping counts like 53.799 entirely.
+        shown = describe(raw) if isinstance(raw, (int, float)) else raw
+        line = f"- {name}: {shown}"
+        if k.get("compare_value") is not None and k.get("compare_label"):
+            prev = k["compare_value"]
+            prev_shown = describe(prev) if isinstance(prev, (int, float)) else prev
+            line += f" (so với {k.get('compare_label')}: {prev_shown})"
+        lines.append(line)
+    return chr(10).join(lines)
 
 
 def _fmt_charts(charts: list[dict]) -> str:
@@ -302,6 +383,16 @@ def build_deck(
 ) -> dict:
     """Plan a deck over already-computed numbers. Never computes anything itself."""
     call_ai_fn = call_ai_fn or call_ai
+    # Drop unusable charts BEFORE anything sees them, so chart_index counts
+    # positions in a list where every entry can actually be drawn. Filtering
+    # later would shift the indices out from under the model.
+    normalized = [normalize_chart(c) for c in (charts or [])]
+    usable = [c for c in normalized if is_renderable(c)]
+    skipped = len(charts or []) - len(usable)
+    if skipped:
+        logger.info(f"[slides] bỏ {skipped} biểu đồ không đủ dữ liệu để vẽ")
+    charts = usable
+
     if not kpis and not charts:
         return {"ok": False, "error": "Chưa có dashboard hoặc biểu đồ nào để dựng slide."}
 
@@ -318,6 +409,7 @@ def build_deck(
         takeaway=LIMITS["takeaway"],
         kpi_label=LIMITS["kpi_label"],
         kpi_value=LIMITS["kpi_value"],
+        number_style_rules=NUMBER_STYLE_RULES,
     )
 
     try:
