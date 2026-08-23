@@ -264,6 +264,13 @@ def test_the_deck_schema_stays_small_enough_for_every_model_in_the_pool():
     longest = max((len(d) for d in descriptions(DECK_SCHEMA)), default=0)
     assert longest == 0, "put the explanation in DECK_PROMPT, not in the schema"
 
+    # The error message names nested array length limits too, and those are what
+    # actually broke it: 12 slides each holding a 4-item and a 5-item array.
+    # The counts are enforced in clamp_deck, so declaring them here bought
+    # nothing and cost every slot in the pool.
+    assert "maxItems" not in encoded
+    assert "minItems" not in encoded
+
     # And the guidance still has to reach the model somewhere.
     assert "chart_split" in DECK_PROMPT
     assert "chart_index" in DECK_PROMPT

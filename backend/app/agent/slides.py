@@ -53,10 +53,14 @@ DECK_SCHEMA = {
     "properties": {
         "title": {"type": "string"},
         "subtitle": {"type": "string"},
+        # No minItems/maxItems anywhere in here. Gemini counts the states a
+        # schema can produce, and nested arrays with length bounds multiply --
+        # 12 slides each holding a 4-item and a 5-item array blew the limit and
+        # the request was refused on every slot at once. The bounds live in
+        # clamp_deck instead, which is where they were always enforced for real;
+        # stating them here bought nothing and cost the whole feature.
         "slides": {
             "type": "array",
-            "minItems": 3,
-            "maxItems": MAX_SLIDES,
             "items": {
                 "type": "object",
                 "required": ["layout"],
@@ -71,14 +75,9 @@ DECK_SCHEMA = {
                     "kicker": {"type": "string"},
                     "heading": {"type": "string"},
                     "takeaway": {"type": "string"},
-                    "bullets": {
-                        "type": "array",
-                        "maxItems": MAX_BULLETS,
-                        "items": {"type": "string"},
-                    },
+                    "bullets": {"type": "array", "items": {"type": "string"}},
                     "kpis": {
                         "type": "array",
-                        "maxItems": MAX_KPIS,
                         "items": {
                             "type": "object",
                             "properties": {
