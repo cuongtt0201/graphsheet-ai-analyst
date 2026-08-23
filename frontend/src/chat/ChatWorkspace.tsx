@@ -750,6 +750,11 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
 
   const [tables, setTables] = useState<FileProfile[]>([]);
   const [gridCache, setGridCache] = useState<Record<string, (string | number)[][]>>({});
+  // The upload response ships a 500-row PREVIEW of the first sheet so the page
+  // paints immediately. It is not the sheet. Cached alone it looked like one,
+  // and the BI explorer was quietly analysing 500 rows of a 268,944-row file.
+  const [partialGrids, setPartialGrids] = useState<Record<string, true>>({});
+  const [notesOpen, setNotesOpen] = useState(false);
   // Sheet edits arrive through chat now. What survives here is only what the
   // GRID needs: the last edit's colour rule, and which sheet it applies to.
   const [copilotResult, setCopilotResult] = useState<SheetCopilotResult | null>(null);
@@ -899,11 +904,17 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
         setSelectedSources(res.tables.map(p => p.source_id));
         const cache: Record<string, (string | number)[][]> = {};
         const derivedKeys: Record<string, true> = {};
+        const partial: Record<string, true> = {};
         for (const p of res.tables) {
-          if (p.grid) cache[p.source_id] = p.grid;
+          if (p.grid) {
+            cache[p.source_id] = p.grid;
+            // A payload grid is the preview, never the whole sheet.
+            if (!p.grid_derived) partial[p.source_id] = true;
+          }
           if (p.grid_derived) derivedKeys[p.source_id] = true;
         }
         setGridCache(cache);
+        setPartialGrids(partial);
         setCopilotGridKeys(derivedKeys);
         const firstActive = res.tables.find((p) => p.grid)?.source_id || res.tables[0].source_id;
         setActiveKey(firstActive);
@@ -1104,6 +1115,18 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
     }
   }, [activeKey]);
 
+  // Upgrade the active sheet from preview to full grid. Without this the first
+  // sheet kept the 500-row upload preview for as long as the user never clicked
+  // away and back -- which is exactly what nobody does with the sheet already
+  // open in front of them.
+  useEffect(() => {
+    if (!activeKey || activeKey === "dashboard") return;
+    if (activeKey.startsWith("result:")) return;
+    if (!partialGrids[activeKey]) return;
+    void ensureFullGrid(activeKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeKey, partialGrids]);
+
   // --- One-shot "AI builds the whole dashboard" (Code Interpreter) ---
   async function buildDashboardAuto(promptOverride?: string) {
     const prompt = (promptOverride ?? input).trim();
@@ -1274,8 +1297,15 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
       // Drop cached grids: re-uploaded files may have new content, and old
       // grids re-fetch lazily via /api/sheet anyway.
       const cache: Record<string, (string | number)[][]> = {};
-      for (const p of profiles) if (p.grid) cache[p.source_id] = p.grid;
+      const partial: Record<string, true> = {};
+      for (const p of profiles) {
+        if (p.grid) {
+          cache[p.source_id] = p.grid;
+          partial[p.source_id] = true;
+        }
+      }
       setGridCache(cache);
+      setPartialGrids(partial);
 
       const initial = res.active || profiles.find((p) => p.grid)?.source_id || profiles[0]?.source_id || "";
       setActiveKey(initial);
@@ -1392,13 +1422,49 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
     [dashboardItems.length]
   );
 
+  /** Load the sheet's real grid unless it is already fully cached. */
+  async function ensureFullGrid(sourceId: string) {
+    if (!sourceId || (gridCache[sourceId] && !partialGrids[sourceId])) return;
+    // Only show the spinner when there is nothing to look at yet; replacing a
+    // preview should not blank a grid the user is already reading.
+    const hasPreview = Boolean(gridCache[sourceId]);
+    if (!hasPreview) setLoadingSheet(true);
+    try {
+      const res = await api.sheet(sourceId);
+      setGridCache((c) => ({ ...c, [sourceId]: res.grid }));
+      setPartialGrids((prev) => {
+        if (!prev[sourceId]) return prev;
+        const next = { ...prev };
+        delete next[sourceId];
+        return next;
+      });
+      setCopilotGridKeys((prev) => {
+        if (res.derived) return { ...prev, [sourceId]: true };
+        if (!prev[sourceId]) return prev;
+        const next = { ...prev };
+        delete next[sourceId];
+        return next;
+      });
+    } catch (e) {
+      setMessages((m) => [...m, { role: "assistant", text: `Lỗi nạp sheet: ${(e as Error).message}` }]);
+    } finally {
+      setLoadingSheet(false);
+    }
+  }
+
   async function selectSheet(sourceId: string) {
     setActiveKey(sourceId);
-    if (gridCache[sourceId]) return;
+    if (gridCache[sourceId] && !partialGrids[sourceId]) return;
     setLoadingSheet(true);
     try {
       const res = await api.sheet(sourceId);
       setGridCache((c) => ({ ...c, [sourceId]: res.grid }));
+      setPartialGrids((prev) => {
+        if (!prev[sourceId]) return prev;
+        const next = { ...prev };
+        delete next[sourceId];
+        return next;
+      });
       setCopilotGridKeys((prev) => {
         if (res.derived) return { ...prev, [sourceId]: true };
         if (!prev[sourceId]) return prev;
@@ -1641,10 +1707,15 @@ function isExecutiveReportRequest(query: string): boolean {
             // questions would silently filter them out.
             setSelectedSources(res.tables.map((p) => p.source_id));
             const cache = { ...gridCache };
+            const partial: Record<string, true> = {};
             for (const p of res.tables) {
-              if (p.grid) cache[p.source_id] = p.grid;
+              if (p.grid) {
+                cache[p.source_id] = p.grid;
+                partial[p.source_id] = true;
+              }
             }
             setGridCache(cache);
+            setPartialGrids((prev) => ({ ...prev, ...partial }));
           }
         } catch (err) {
           console.error("Failed to sync tables after data generation:", err);
@@ -2211,22 +2282,41 @@ function isExecutiveReportRequest(query: string): boolean {
                 const sem = t?.semantics;
                 const flags = t?.flags ?? [];
                 if (!t || (!sem && flags.length === 0)) return null;
+                const caveats = sem?.caveats ?? [];
+                const warnCount = caveats.length + flags.length;
+                // Collapsed by default. Seven paragraphs of caveats pushed the
+                // spreadsheet itself off the screen, so the thing the user came
+                // to look at lost to a footnote about it.
                 return (
-                  <div style={{ padding: "0.45rem 1rem", fontSize: "0.8rem", background: "#f7faf9", borderBottom: "1px solid #e1e7e4", color: "#3d4d45", display: "flex", flexDirection: "column", gap: "3px" }}>
-                    {sem && (
-                      <span>
-                        🔬 <strong>{sem.grain_description || sem.grain_type}</strong>
-                        {sem.domain ? ` · ${sem.domain}` : ""}
-                        {sem.sheet_role === "fact" ? " · bảng giao dịch" : sem.sheet_role === "dimension" ? " · bảng danh mục" : ""}
-                        {sem.primary_measure ? ` · chỉ số chính: ${sem.primary_measure}${sem.measure_unit ? ` (${sem.measure_unit})` : ""}` : ""}
-                      </span>
+                  <div className="data-notes">
+                    <div className="data-notes__head">
+                      {sem && (
+                        <span className="data-notes__grain">
+                          🔬 <strong>{sem.grain_description || sem.grain_type}</strong>
+                          {sem.domain ? ` · ${sem.domain}` : ""}
+                          {sem.sheet_role === "fact" ? " · bảng giao dịch" : sem.sheet_role === "dimension" ? " · bảng danh mục" : ""}
+                          {sem.primary_measure ? ` · chỉ số chính: ${sem.primary_measure}${sem.measure_unit ? ` (${sem.measure_unit})` : ""}` : ""}
+                        </span>
+                      )}
+                      {warnCount > 0 && (
+                        <button
+                          className="data-notes__toggle"
+                          onClick={() => setNotesOpen((o) => !o)}
+                        >
+                          ⚠ {warnCount} lưu ý về chất lượng dữ liệu {notesOpen ? "▲" : "▼"}
+                        </button>
+                      )}
+                    </div>
+                    {notesOpen && warnCount > 0 && (
+                      <div className="data-notes__body">
+                        {caveats.map((c, i) => (
+                          <span key={`c${i}`}>⚠ {c}</span>
+                        ))}
+                        {flags.map((f, i) => (
+                          <span key={`f${i}`}>⚠ {f}</span>
+                        ))}
+                      </div>
                     )}
-                    {(sem?.caveats ?? []).map((c, i) => (
-                      <span key={`c${i}`} style={{ color: "#8a5a1b" }}>⚠ {c}</span>
-                    ))}
-                    {flags.map((f, i) => (
-                      <span key={`f${i}`} style={{ color: "#8a5a1b" }}>⚠ {f}</span>
-                    ))}
                   </div>
                 );
               })()}
@@ -2485,7 +2575,10 @@ function isExecutiveReportRequest(query: string): boolean {
                 <div style={{ flex: 1, overflow: "hidden" }}>
                   <ViewErrorBoundary>
                     <React.Suspense fallback={<div className="chat-empty" style={{ flex: 1 }}><p>Đang nạp BI Explorer…</p></div>}>
-                      <BIExplore grid={activeSheet.grid} />
+                      <BIExplore
+                        grid={activeSheet.grid}
+                        totalRows={tables.find((p) => p.source_id === activeKey)?.row_count}
+                      />
                     </React.Suspense>
                   </ViewErrorBoundary>
                 </div>
