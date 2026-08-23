@@ -20,6 +20,8 @@ import logging
 import pandas as pd
 
 from app.agent.chart_utils import condense_chat_chart
+from typing import Callable
+
 from app.agent.sandbox import run_pandas
 from app.ai.pool import AllModelsFailedError, call_ai, progress_emit
 from app.agent.babeltele import compress_schema_babeltele
@@ -526,7 +528,8 @@ def _sheet_answer(mutation: dict) -> str:
 def answer_question(profiles: list[dict], dataframes: dict, question: str, history: list[dict],
                     behaviors: list[dict] | None = None, user_id: str | None = None,
                     workspace_block: str = "", semantics: dict | None = None,
-                    eda_facts: dict | None = None, slide_source: dict | None = None) -> dict:
+                    eda_facts: dict | None = None, slide_source: dict | None = None,
+                    build_dashboard_fn: Callable[[str], dict] | None = None) -> dict:
     """Returns a JSON-serializable reply:
       {"answer": str, "code": str|None, "table": {...}|None, "chart": {...}|None,
        "error": str|None, "follow_up": [str], "used_memory_ids": [str]}
@@ -635,6 +638,11 @@ def answer_question(profiles: list[dict], dataframes: dict, question: str, histo
         from app.agent.slides import build_deck
 
         layout = slide_source or {}
+        if not layout.get("kpis") and not layout.get("charts") and build_dashboard_fn:
+            # Nothing pinned yet. Build the dashboard the deck needs instead of
+            # sending the user off to press a button and ask again.
+            _step("📊 Chưa có dashboard — đang dựng trước khi làm slide...")
+            layout = build_dashboard_fn(question) or layout
         res = build_deck(
             user_prompt=question,
             kpis=layout.get("kpis") or [],

@@ -51,8 +51,8 @@ DECK_SCHEMA = {
     "type": "object",
     "required": ["title", "slides"],
     "properties": {
-        "title": {"type": "string", "description": f"Tiêu đề bài thuyết trình, tối đa {LIMITS['deck_title']} ký tự."},
-        "subtitle": {"type": "string", "description": f"Một dòng phụ đề, tối đa {LIMITS['deck_subtitle']} ký tự."},
+        "title": {"type": "string"},
+        "subtitle": {"type": "string"},
         "slides": {
             "type": "array",
             "minItems": 3,
@@ -61,28 +61,20 @@ DECK_SCHEMA = {
                 "type": "object",
                 "required": ["layout"],
                 "properties": {
-                    "layout": {
-                        "type": "string",
-                        "enum": list(LAYOUTS),
-                        "description": (
-                            "title: trang bìa. "
-                            "section: trang phân mục, chỉ một dòng chữ lớn. "
-                            "kpi: 2-4 con số lớn. "
-                            "chart: một biểu đồ chiếm trọn trang + một câu kết luận. "
-                            "chart_split: biểu đồ bên trái, gạch đầu dòng bên phải. "
-                            "bullets: tiêu đề + tối đa 5 gạch đầu dòng. "
-                            "big_number: một con số duy nhất gây ấn tượng. "
-                            "closing: đề xuất hành động, trang cuối."
-                        ),
-                    },
-                    "kicker": {"type": "string", "description": f"Nhãn nhỏ phía trên tiêu đề, tối đa {LIMITS['kicker']} ký tự."},
-                    "heading": {"type": "string", "description": f"Tiêu đề slide, tối đa {LIMITS['heading']} ký tự."},
-                    "takeaway": {"type": "string", "description": f"MỘT câu kết luận rút ra, tối đa {LIMITS['takeaway']} ký tự."},
+                    # Descriptions stay terse here on purpose. Gemini rejects a
+                    # request outright when the schema "produces a constraint
+                    # that has too many states for serving", and long
+                    # descriptions are the stated cause -- the weaker models in
+                    # the pool refused this schema until the explanations moved
+                    # into the prompt, where they cost nothing structural.
+                    "layout": {"type": "string", "enum": list(LAYOUTS)},
+                    "kicker": {"type": "string"},
+                    "heading": {"type": "string"},
+                    "takeaway": {"type": "string"},
                     "bullets": {
                         "type": "array",
                         "maxItems": MAX_BULLETS,
                         "items": {"type": "string"},
-                        "description": f"Tối đa {MAX_BULLETS} ý, mỗi ý tối đa {LIMITS['bullet']} ký tự. Viết như lời nói, không nhồi số.",
                     },
                     "kpis": {
                         "type": "array",
@@ -91,17 +83,14 @@ DECK_SCHEMA = {
                             "type": "object",
                             "properties": {
                                 "label": {"type": "string"},
-                                "value": {"type": "string", "description": "Số ĐÃ định dạng sẵn, vd '2,02 tỷ' hoặc '68%'."},
+                                "value": {"type": "string"},
                                 "note": {"type": "string"},
                             },
                         },
                     },
-                    "big_value": {"type": "string", "description": f"Con số lớn, đã định dạng, tối đa {LIMITS['big_number']} ký tự."},
-                    "big_caption": {"type": "string", "description": f"Câu giải thích con số, tối đa {LIMITS['big_caption']} ký tự."},
-                    "chart_index": {
-                        "type": "integer",
-                        "description": "Chỉ số biểu đồ trong DANH SÁCH BIỂU ĐỒ, bắt đầu từ 0. Bắt buộc với layout chart/chart_split.",
-                    },
+                    "big_value": {"type": "string"},
+                    "big_caption": {"type": "string"},
+                    "chart_index": {"type": "integer"},
                 },
             },
         },
@@ -231,6 +220,18 @@ NHẬN XÉT ĐÃ CÓ:
 
 YÊU CẦU CỦA NGƯỜI DÙNG: "{user_prompt}"
 
+CÁC LOẠI SLIDE (`layout`):
+- title: trang bìa.
+- section: trang phân mục, chỉ một dòng chữ lớn.
+- kpi: 2-4 con số lớn (dùng `kpis`, mỗi mục có `label` + `value` đã định dạng sẵn như "2,02 tỷ", "68%").
+- chart: một biểu đồ chiếm trọn trang + một câu `takeaway`. Bắt buộc có `chart_index`.
+- chart_split: biểu đồ bên trái, `bullets` bên phải. Bắt buộc có `chart_index`.
+- bullets: `heading` + tối đa {max_bullets} gạch đầu dòng.
+- big_number: một con số duy nhất gây ấn tượng (`big_value` + `big_caption`).
+- closing: đề xuất hành động, trang cuối.
+
+`chart_index` là số thứ tự trong DANH SÁCH BIỂU ĐỒ ở trên, đếm từ 0.
+
 CÁCH DỰNG:
 1. Mở bằng slide `title`, kết bằng slide `closing` chứa đề xuất hành động.
 2. Ở giữa: mỗi biểu đồ đáng nói cho một slide `chart` hoặc `chart_split`. Dùng
@@ -282,9 +283,10 @@ def build_deck(
     kpis: list[dict],
     charts: list[dict],
     insights: list[str] | None = None,
-    call_ai_fn: Callable = call_ai,
+    call_ai_fn: Callable | None = None,
 ) -> dict:
     """Plan a deck over already-computed numbers. Never computes anything itself."""
+    call_ai_fn = call_ai_fn or call_ai
     if not kpis and not charts:
         return {"ok": False, "error": "Chưa có dashboard hoặc biểu đồ nào để dựng slide."}
 

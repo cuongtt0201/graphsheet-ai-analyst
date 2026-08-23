@@ -7,6 +7,7 @@ POST /api/upload) - no Google login required for this flow.
   POST /api/chat    -> {message, history?} -> grounded answer (+code/table/chart)
 """
 
+import logging
 import queue
 import threading
 
@@ -18,6 +19,8 @@ from app.agent.chat_agent import answer_question, build_workspace_context
 from app.ai.pool import progress_emit
 from app.memory import graph
 from app.state import get_state, get_user_id
+
+logger = logging.getLogger(__name__)
 from app.util_json import ndjson_line
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -74,6 +77,47 @@ async def save_dashboard_items(request: Request, body: dict):
     state = get_state(request)
     state["dashboard_items"] = items  # LazySessionState persists JSON-able values to disk on set
     return {"ok": True, "count": len(items)}
+
+
+def _build_dashboard_now(state: dict, user_id: str, prompt: str) -> dict:
+    """Run the auto-dashboard inline and return what it produced.
+
+    Asking for a presentation and being told to go press a button first is the
+    app making its own pipeline the user's problem. The steps still stream, so
+    the wait is visible rather than silent -- it is the same build either way,
+    just started by the request that needs it.
+    """
+    from app.agent.code_interpreter import run_code_agent
+    from app.agent.sub_agents import run_data_agent
+
+    emit = progress_emit.get()
+
+    def relay(event: dict) -> None:
+        if emit is not None and event.get("type") == "step":
+            emit(event)
+
+    try:
+        if not state.get("cleaned_df"):
+            for event in run_data_agent(state, prompt):
+                relay(event)
+                if event["type"] in ("error", "need_join_confirm"):
+                    return {"kpis": [], "charts": [], "insights": []}
+
+        if state.get("cleaned_df") is None:
+            return {"kpis": [], "charts": [], "insights": []}
+
+        for event in run_code_agent(state, prompt, user_id):
+            relay(event)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[chat] inline dashboard build failed: {exc}")
+        return {"kpis": [], "charts": [], "insights": []}
+
+    layout = state.get("layout") or {}
+    return {
+        "kpis": layout.get("kpis") or [],
+        "charts": layout.get("charts") or [],
+        "insights": layout.get("insights") or [],
+    }
 
 
 def _slide_source(state: dict) -> dict:
@@ -205,7 +249,8 @@ async def chat(request: Request, body: dict):
                                         workspace_block=workspace_block,
                                         semantics=state.get("semantics"),
                                         eda_facts=state.get("eda_facts"),
-                                        slide_source=slide_source)
+                                        slide_source=slide_source,
+                                        build_dashboard_fn=lambda p: _build_dashboard_now(state, user_id, p))
 
                 # A sheet edit changes session state, which answer_question has
                 # no handle on. Apply it here, the same way /agent/sheet/copilot
