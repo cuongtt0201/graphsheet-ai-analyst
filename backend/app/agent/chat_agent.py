@@ -67,7 +67,7 @@ _DECISION_SCHEMA = {
     "type": "object",
     "required": ["mode", "reason"],
     "properties": {
-        "mode": {"type": "string", "enum": ["answer", "code", "sheet", "clarify"]},
+        "mode": {"type": "string", "enum": ["answer", "code", "sheet", "slide", "clarify"]},
         "reason": {"type": "string"},
         "answer": {"type": "string"},
         "code": {"type": "string"},
@@ -106,6 +106,10 @@ Choose ONE mode, and output a SINGLE JSON matching the schema:
   {{"mode": "sheet", "reason": "<1-sentence explanation of your choice>"}}
   Do NOT write code for this mode; the spreadsheet copilot plans the formula itself.
   The dividing line is where the answer belongs: "tổng doanh thu là bao nhiêu?" is a question -> mode=code; "thêm cột doanh thu thuần vào bảng" changes the sheet -> mode=sheet. When the user says thêm/tạo/chèn cột, tô màu, đánh dấu, định dạng, it is mode=sheet.
+- If the user wants a SLIDE DECK / presentation ("tạo slide", "làm bài thuyết trình", "dựng powerpoint", "slide trình sếp"):
+  {{"mode": "slide", "reason": "<1-sentence explanation of your choice>"}}
+  Do NOT write code for this mode. The deck is built from the dashboard that already exists.
+  Note the difference from a written report ("viết báo cáo") — that is prose, this is slides.
 - If the question is genuinely AMBIGUOUS and guessing wrong would produce a confidently WRONG number:
   {{"mode": "clarify", "clarify_question": "<một câu hỏi ngắn bằng tiếng Việt để làm rõ>", "clarify_options": ["<2-4 lựa chọn cụ thể, dùng đúng tên cột/sheet có thật>"], "reason": "<1-sentence>"}}
 
@@ -471,6 +475,19 @@ Output a SINGLE JSON matching the schema:
 """
 
 
+def _deck_answer(res: dict) -> str:
+    """What chat says once the deck exists. The deck itself is the deliverable,
+    so this stays short and points at it rather than restating it."""
+    if not res.get("ok"):
+        return f"⛔ {res.get('error') or 'Không dựng được bài thuyết trình.'}"
+    deck = res.get("deck") or {}
+    n = len(deck.get("slides") or [])
+    return (
+        f"🎞️ Đã dựng bài thuyết trình **{deck.get('title')}** — {n} slide."
+        + chr(10) + chr(10) + "Bấm vào khung bên dưới để trình chiếu."
+    )
+
+
 def _sheet_answer(mutation: dict) -> str:
     """What the chat says after a sheet edit -- the formula included, because
     the user asked for a spreadsheet change and a formula is the thing they can
@@ -509,7 +526,7 @@ def _sheet_answer(mutation: dict) -> str:
 def answer_question(profiles: list[dict], dataframes: dict, question: str, history: list[dict],
                     behaviors: list[dict] | None = None, user_id: str | None = None,
                     workspace_block: str = "", semantics: dict | None = None,
-                    eda_facts: dict | None = None) -> dict:
+                    eda_facts: dict | None = None, slide_source: dict | None = None) -> dict:
     """Returns a JSON-serializable reply:
       {"answer": str, "code": str|None, "table": {...}|None, "chart": {...}|None,
        "error": str|None, "follow_up": [str], "used_memory_ids": [str]}
@@ -607,6 +624,28 @@ def answer_question(profiles: list[dict], dataframes: dict, question: str, histo
             "code": None, "table": None, "chart": None, "scalar": None,
             "error": None if mutation.get("ok") else mutation.get("error"),
             "sheet_mutation": mutation,
+            "follow_up": decision.get("follow_up") or [],
+            "reason": reason, "used_memory_ids": used_memory_ids,
+        }
+
+    if decision["mode"] == "slide":
+        # Slides are planned over numbers that are already computed -- the deck
+        # builder never calculates anything, so a slide cannot disagree with the
+        # dashboard it came from.
+        from app.agent.slides import build_deck
+
+        layout = slide_source or {}
+        res = build_deck(
+            user_prompt=question,
+            kpis=layout.get("kpis") or [],
+            charts=layout.get("charts") or [],
+            insights=layout.get("insights") or [],
+        )
+        return {
+            "answer": _deck_answer(res),
+            "code": None, "table": None, "chart": None, "scalar": None,
+            "error": None if res.get("ok") else res.get("error"),
+            "deck": res.get("deck"),
             "follow_up": decision.get("follow_up") or [],
             "reason": reason, "used_memory_ids": used_memory_ids,
         }

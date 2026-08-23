@@ -76,6 +76,28 @@ async def save_dashboard_items(request: Request, body: dict):
     return {"ok": True, "count": len(items)}
 
 
+def _slide_source(state: dict) -> dict:
+    """KPIs + charts currently on the Dashboard tab, in one shape."""
+    items = state.get("dashboard_items") or []
+    if items:
+        kpis, charts = [], []
+        for item in items:
+            if item.get("type") == "kpi":
+                kpis.append({"title": item.get("title", ""), "value": item.get("scalar")})
+            elif item.get("type") == "chart" and item.get("chart"):
+                chart = dict(item["chart"])
+                chart.setdefault("title", item.get("title", ""))
+                charts.append(chart)
+        return {"kpis": kpis, "charts": charts, "insights": []}
+
+    layout = state.get("layout") or {}
+    return {
+        "kpis": layout.get("kpis") or [],
+        "charts": layout.get("charts") or [],
+        "insights": layout.get("insights") or [],
+    }
+
+
 @router.post("/chat")
 async def chat(request: Request, body: dict):
     """Streams NDJSON progress events, then a final "done" event carrying the
@@ -171,11 +193,19 @@ async def chat(request: Request, body: dict):
                     state.get("layout"), state.get("dashboard_items")
                 )
 
+                # Slides are built over the dashboard the user is looking at.
+                # Pinned items win over state["layout"] for the same reason
+                # /api/agent/report prefers them: the Dashboard tab can be
+                # assembled by pinning chat results one at a time, which never
+                # touches state["layout"].
+                slide_source = _slide_source(state)
+
                 reply = answer_question(profiles, dataframes, message, history,
                                         behaviors=behaviors, user_id=user_id,
                                         workspace_block=workspace_block,
                                         semantics=state.get("semantics"),
-                                        eda_facts=state.get("eda_facts"))
+                                        eda_facts=state.get("eda_facts"),
+                                        slide_source=slide_source)
 
                 # A sheet edit changes session state, which answer_question has
                 # no handle on. Apply it here, the same way /agent/sheet/copilot

@@ -1,3 +1,6 @@
+import type { Deck } from "./chat/SlideDeck";
+export type { Deck, DeckSlide } from "./chat/SlideDeck";
+
 const BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://localhost:8000" : "");
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -227,6 +230,9 @@ export interface ChatReply {
    * Carries the same payload the copilot endpoint returns, plus the source_id
    * the server applied it to. */
   sheet_mutation?: SheetCopilotResult & { source_id?: string | null };
+  /** Set when the turn built a slide deck. Charts ride along inside it so the
+   * browser draws them live rather than as flattened images. */
+  deck?: Deck | null;
   /** The planner's one-line explanation of the approach it chose. */
   reason?: string;
   /** True when the AI asked the user to disambiguate instead of guessing;

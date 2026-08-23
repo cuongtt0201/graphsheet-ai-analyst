@@ -190,10 +190,12 @@ def _find_duplicate_skill(owner_id: str, name: str, docstring: str, code: str) -
             return s
 
         if new_ops and doc_jaccard > _CORROBORATING_JACCARD_THRESHOLD:
-            try:
-                with open(s["file"], "r", encoding="utf-8") as f:
-                    existing_code = f.read()
-            except OSError:
+            # get_available_skills already carries the source in "code", for both
+            # tiers. Reading s["file"] raised KeyError -- no skill dict has ever
+            # had that key -- and KeyError is not OSError, so it escaped the
+            # guard below and killed the whole request that triggered it.
+            existing_code = s.get("code") or ""
+            if not existing_code:
                 continue
             existing_ops = _operation_fingerprint(existing_code, s["name"])
             if _jaccard(new_ops, existing_ops) >= _OPERATION_JACCARD_THRESHOLD:

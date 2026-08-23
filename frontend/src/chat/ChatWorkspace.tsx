@@ -25,6 +25,7 @@ import WorkBench, { type EngineState } from "./WorkBench";
 import AuthBar from "./AuthBar";
 
 const UniverGrid = React.lazy(() => import("./UniverGrid"));
+const SlideDeck = React.lazy(() => import("./SlideDeck"));
 
 const Logo = () => (
   <svg className="graphsheet-logo-svg" viewBox="0 0 32 32" width="28" height="28" style={{ marginRight: '10px' }}>
@@ -2699,6 +2700,18 @@ function isExecutiveReportRequest(query: string): boolean {
                         </button>
                       )}
                     </>
+                  )}
+
+                  {/* A deck renders in place: it is the deliverable, so it
+                      belongs where the user is already reading. */}
+                  {m.reply.deck && m.reply.deck.slides.length > 0 && (
+                    <div style={{ marginTop: "0.6rem" }}>
+                      <ViewErrorBoundary>
+                        <React.Suspense fallback={<div className="mini-chart__loading">Đang dựng slide…</div>}>
+                          <SlideDeck deck={m.reply.deck} />
+                        </React.Suspense>
+                      </ViewErrorBoundary>
+                    </div>
                   )}
 
                   {/* Chart link (chart itself renders on sheet side) */}
