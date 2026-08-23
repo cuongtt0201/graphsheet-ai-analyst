@@ -23,7 +23,9 @@ DEFAULT_COLORS = [
 def render_chart_to_png(chart: dict[str, Any], width_in: float = 7.0, height_in: float = 4.2, dpi: int = 200) -> io.BytesIO | None:
     """Render a chart definition dictionary into PNG image bytes.
     
-    Supports 'bar', 'horizontal-bar', 'line', 'area', 'pie', 'doughnut', 'scatter', 'vega'.
+    Supports 'bar', 'horizontal-bar', 'line', 'area', 'pie', 'donut', 'scatter',
+    'funnel' and 'vega' -- 9 of the 26 types MiniChart draws in the browser.
+    Anything else returns None and the chart is silently missing from the file.
     """
     if not chart or not isinstance(chart, dict):
         return None
@@ -82,7 +84,7 @@ def render_chart_to_png(chart: dict[str, Any], width_in: float = 7.0, height_in:
         return None
 
     # Truncate to top items for visual clarity if too many points
-    if len(clean_values) > 20 and chart_type in ("bar", "pie", "doughnut"):
+    if len(clean_values) > 20 and chart_type in ("bar", "pie", "donut", "doughnut"):
         clean_values = clean_values[:20]
         clean_labels = clean_labels[:20]
 
@@ -102,11 +104,16 @@ def render_chart_to_png(chart: dict[str, Any], width_in: float = 7.0, height_in:
     colors = [DEFAULT_COLORS[i % len(DEFAULT_COLORS)] for i in range(len(clean_values))]
 
     try:
-        if chart_type in ("pie", "doughnut"):
+        # ChartType calls it "donut"; this branch only ever matched "doughnut",
+        # a spelling nothing in the system emits. So every donut chart fell
+        # through to the bar default and a report showed a bar chart where the
+        # dashboard showed a ring -- same numbers, different chart, no warning.
+        if chart_type in ("pie", "donut", "doughnut"):
             # Pie / Doughnut Chart
             ax.grid(False)
             ax.axis("off")
-            wedgeprops = dict(width=0.45 if chart_type == "doughnut" else 1.0, edgecolor="#FFFFFF", linewidth=2)
+            is_ring = chart_type in ("donut", "doughnut")
+            wedgeprops = dict(width=0.45 if is_ring else 1.0, edgecolor="#FFFFFF", linewidth=2)
             wedges, texts, autotexts = ax.pie(
                 clean_values,
                 labels=clean_labels if len(clean_labels) <= 8 else None,
