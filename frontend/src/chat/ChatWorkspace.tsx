@@ -25,7 +25,6 @@ import WorkBench, { type EngineState } from "./WorkBench";
 import AuthBar from "./AuthBar";
 
 const UniverGrid = React.lazy(() => import("./UniverGrid"));
-const BIExplore = React.lazy(() => import("./BIExplore"));
 
 const Logo = () => (
   <svg className="graphsheet-logo-svg" viewBox="0 0 32 32" width="28" height="28" style={{ marginRight: '10px' }}>
@@ -1054,7 +1053,6 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
   const [dashboardJoinWarnings, setDashboardJoinWarnings] = useState<string[]>([]);
   const [dashboardInsights, setDashboardInsights] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
-  const [viewMode, setViewMode] = useState<"grid" | "bi">("grid");
 
   // Presentation-only preferences (arrangement + accent color of the pinned
   // Dashboard tiles) - purely visual, no effect on data/computation. Kept in
@@ -1108,12 +1106,6 @@ export default function ChatWorkspace({ email, onLogout }: ChatWorkspaceProps) {
     }
   };
 
-
-  useEffect(() => {
-    if (activeKey === "dashboard" || activeKey === "") {
-      setViewMode("grid");
-    }
-  }, [activeKey]);
 
   // Upgrade the active sheet from preview to full grid. Without this the first
   // sheet kept the 500-row upload preview for as long as the user never clicked
@@ -2214,24 +2206,6 @@ function isExecutiveReportRequest(query: string): boolean {
               ))}
             </div>
             <div className="sheet-body" style={{ display: "flex", flexDirection: "column" }}>
-              {activeKey !== "dashboard" && activeSheet && (
-                <div className="sheet-body-toggle-bar" style={{ display: "flex", justifyContent: "flex-end", padding: "0.5rem 1rem", borderBottom: "1px solid #e1e7e4", gap: "8px", background: "#fcfdfe" }}>
-                  <button 
-                    className={`button button--small ${viewMode === "grid" ? "button--primary" : "button--secondary"}`} 
-                    onClick={() => setViewMode("grid")}
-                  >
-                    🧮 Xem dạng bảng
-                  </button>
-                  <button
-                    className={`button button--small ${viewMode === "bi" ? "button--primary" : "button--secondary"}`}
-                    onClick={() => setViewMode("bi")}
-                  >
-                    📊 Kéo thả biểu đồ (BI)
-                  </button>
-                </div>
-              )}
-
-
               {/* Header-detection banner: show what row the AI treated as the
                   header, and let the user correct it when the file is messy. */}
               {(() => {
@@ -2570,17 +2544,6 @@ function isExecutiveReportRequest(query: string): boolean {
               ) : loadingSheet && !activeSheet ? (
                 <div className="chat-empty" style={{ flex: 1 }}>
                   <p>Đang nạp sheet…</p>
-                </div>
-              ) : viewMode === "bi" && activeSheet ? (
-                <div style={{ flex: 1, overflow: "hidden" }}>
-                  <ViewErrorBoundary>
-                    <React.Suspense fallback={<div className="chat-empty" style={{ flex: 1 }}><p>Đang nạp BI Explorer…</p></div>}>
-                      <BIExplore
-                        grid={activeSheet.grid}
-                        totalRows={tables.find((p) => p.source_id === activeKey)?.row_count}
-                      />
-                    </React.Suspense>
-                  </ViewErrorBoundary>
                 </div>
               ) : (
                 <div className="univer-wrapper" style={{ flex: "1 1 auto", position: "relative", minHeight: 0, display: "flex", flexDirection: "column" }}>

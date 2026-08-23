@@ -11,7 +11,6 @@ export default defineConfig({
         manualChunks(id) {
           if (id.includes('@univerjs')) return 'vendor-univer'
           if (id.includes('vega') || id.includes('d3')) return 'vendor-vega'
-          if (id.includes('@kanaries') || id.includes('graphic-walker')) return 'vendor-graphic-walker'
           if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) return 'vendor-react'
         },
       },

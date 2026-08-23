@@ -10,7 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@kanaries/graphic-walker": "^0.5.2",
     "@univerjs/preset-sheets-core": "^0.25.1",
     "@univerjs/presets": "^0.25.1",
     "react": "^19.2.7",
