@@ -71,3 +71,30 @@ def test_unparseable_chart_values_become_zero_not_a_crash():
         "values": ["", "n/a"],
     })
     assert chart["values"] == [0.0, 0.0]
+
+
+def test_export_charts_accept_the_shape_the_dashboard_stores():
+    """Reports export charts straight from state["layout"], which stores
+    {data: [{label, value}]} -- while this renderer reads labels/values. Every
+    .docx/.pptx/.xlsx built from an auto-dashboard therefore came out with no
+    charts at all, and returned None rather than saying so."""
+    from app.agent.chart_renderer import render_chart_to_png
+
+    layout_shape = {
+        "title": "Xu hướng doanh thu",
+        "type": "line",
+        "data": [{"label": "2025-05", "value": 913883329.0},
+                 {"label": "2025-06", "value": 1166601453.0}],
+    }
+    png = render_chart_to_png(layout_shape)
+    assert png is not None
+    assert len(png.getvalue()) > 1000
+
+
+def test_one_normalizer_serves_every_server_side_chart_consumer():
+    """The slide planner and the report exporter must agree on chart shape.
+    They agreed by accident before -- both were wrong in the same way."""
+    from app.agent import chart_utils, slides
+
+    assert slides.normalize_chart is chart_utils.normalize_chart
+    assert slides.is_renderable is chart_utils.is_renderable

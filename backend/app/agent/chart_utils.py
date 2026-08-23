@@ -8,6 +8,8 @@ Two data shapes are supported:
   - chat charts:    {"type", "labels": [...], "values": [...]}
 """
 
+from typing import Any
+
 MAX_LINE_POINTS = 40
 MAX_BAR_POINTS = 12
 MAX_PIE_POINTS = 6
@@ -346,3 +348,71 @@ def condense_chat_chart(chart: dict | None) -> dict | None:
     chart["labels"] = [lbl for lbl, _ in capped]
     chart["values"] = [val for _, val in capped]
     return chart
+
+
+# ── Chart shape ────────────────────────────────────────────────────────────
+# Two shapes for the same thing exist in this codebase: the auto-dashboard
+# emits {title, type, data: [{label, value}]}, while every renderer -- MiniChart
+# in the browser, chart_renderer for .docx/.pptx/.xlsx -- reads
+# {labels, values}. The browser has always bridged them in layoutChartToSpec.
+# The backend had no bridge at all, so a chart full of data reached the slide
+# planner and the report exporter looking empty, and both produced blank frames
+# without complaining. One definition, here, used by everything server-side.
+
+# What each chart type needs before MiniChart will draw it. Mirrored from the
+# renderer on purpose: offering the model a chart the browser then refuses is
+# how a slide ends up as an empty frame with a caption underneath explaining a
+# trend nobody can see.
+_CHART_REQUIREMENTS = {
+    "scatter": "points",
+    "bubble": "points",
+    "heatmap": "matrix",
+    "stacked-bar": "series",
+    "grouped-bar": "series",
+    "multi-line": "series",
+    "stacked-area": "series",
+    "combo": "series",
+    "radar": "series",
+    "vega": "vegaLiteSpec",
+}
+
+
+def normalize_chart(chart: Any) -> dict:
+    """Put a dashboard chart into the shape the renderer reads.
+
+    The auto-dashboard emits {title, type, data: [{label, value}]}; MiniChart
+    reads {labels, values}. The browser converts between them in
+    layoutChartToSpec, but the deck is planned server-side and never passed
+    through it -- so every chart arrived looking empty, the prompt listed them
+    with no data, and the slides framed blank boxes under confident headings.
+    Mirrors layoutChartToSpec deliberately; the two must agree.
+    """
+    if not isinstance(chart, dict):
+        return {}
+
+    out = dict(chart)
+    if chart.get("type") == "vega" and chart.get("vegaLiteSpec"):
+        out.setdefault("labels", [])
+        out.setdefault("values", [])
+        return out
+
+    rows = chart.get("data") or []
+    if not chart.get("labels") and rows:
+        out["labels"] = [r.get("label") for r in rows if isinstance(r, dict)]
+    if not chart.get("values") and rows:
+        out["values"] = [r.get("value") for r in rows if isinstance(r, dict)]
+    out.setdefault("type", "bar")
+    return out
+
+
+def is_renderable(chart: Any) -> bool:
+    """True when this chart carries the data its own type requires."""
+    if not isinstance(chart, dict):
+        return False
+    required = _CHART_REQUIREMENTS.get(str(chart.get("type") or "").strip())
+    if required:
+        payload = chart.get(required)
+        return bool(payload)
+    # Everything else -- bar, line, pie, donut, gauge, bullet, progress -- draws
+    # from `values`.
+    return bool(chart.get("values"))

@@ -345,7 +345,7 @@ def test_a_chart_that_cannot_be_drawn_is_not_offered_to_the_model():
     "Không đủ dữ liệu để vẽ biểu đồ này" under a heading confidently describing
     a trend. Such charts are dropped before the model can reference one.
     """
-    from app.agent.slides import is_renderable
+    from app.agent.chart_utils import is_renderable
 
     good = {"type": "bar", "title": "Doanh thu", "labels": ["B"], "values": [1]}
     empty = {"type": "bar", "title": "Rỗng", "labels": [], "values": []}
@@ -405,7 +405,7 @@ def test_the_backend_requirements_match_what_the_renderer_checks():
     these type/field pairs.
     """
     from pathlib import Path
-    from app.agent.slides import _CHART_REQUIREMENTS
+    from app.agent.chart_utils import _CHART_REQUIREMENTS
 
     src = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "chat" / "MiniChart.tsx")
     if not src.exists():
@@ -430,7 +430,7 @@ def test_dashboard_charts_are_normalized_before_anything_reads_them():
     data looked empty, was described to the model as having none, and reached a
     slide as a blank frame under a confident heading.
     """
-    from app.agent.slides import is_renderable, normalize_chart
+    from app.agent.chart_utils import is_renderable, normalize_chart
 
     raw = {
         "title": "Xu hướng doanh thu theo tháng",

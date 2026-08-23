@@ -28,6 +28,14 @@ def render_chart_to_png(chart: dict[str, Any], width_in: float = 7.0, height_in:
     if not chart or not isinstance(chart, dict):
         return None
 
+    # Accept either shape. Charts arrive here straight from state["layout"],
+    # which stores {data: [{label, value}]}, while everything below reads
+    # labels/values -- so every report exported from an auto-built dashboard
+    # came out with no charts at all, and said nothing about it.
+    from app.agent.chart_utils import normalize_chart
+
+    chart = normalize_chart(chart)
+
     try:
         import matplotlib
         matplotlib.use("Agg")
